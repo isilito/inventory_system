@@ -1,6 +1,6 @@
 <?php
 /**
- * stock.php — Stock adjustment & restocking
+ * stock.php - Stock adjustment & restocking
  * Pick a variant, then either record a restock from a supplier
  * or make a manual adjustment (damaged, count correction, etc).
  */
@@ -9,9 +9,10 @@ require_once __DIR__ . '/includes/bootstrap.php';
 
 $pageTitle = 'Stock';
 
-// Selected variant comes from the form (POST) or the link (GET)
+// Selected variant: from the form on POST, from the picker (?variant=ID) otherwise
 $variantId = (int) ($_POST['variant_id'] ?? $_GET['variant'] ?? 0);
 
+// Handle restock / adjust submissions, then redirect so a refresh doesn't resubmit
 if (is_post()) {
     $action = $_POST['action'] ?? '';
     $qty    = (int) ($_POST['quantity'] ?? 0);
@@ -26,6 +27,7 @@ if (is_post()) {
             if ($cost < 0) {
                 throw new RuntimeException('Unit cost cannot be negative.');
             }
+            // The invoice / reference number is stored in the movement's "reason" field
             change_stock($variantId, $qty, 'restock', [
                 'unit_cost' => $cost,
                 'supplier'  => trim($_POST['supplier'] ?? ''),
@@ -33,17 +35,19 @@ if (is_post()) {
             ]);
             flash("Restocked $qty unit(s).");
         } elseif ($action === 'adjust') {
-            // Removing stock makes the change negative
+            // Quantity is always positive in the form; "remove" flips it to a negative change
             $delta  = ($_POST['direction'] ?? '') === 'remove' ? -$qty : $qty;
             $reason = $_POST['reason'] ?? 'Other';
             $note   = trim($_POST['note'] ?? '');
 
+            // Reason and optional note are combined into one log entry
             change_stock($variantId, $delta, 'adjust', [
                 'reason' => $reason . ($note !== '' ? ' — ' . $note : ''),
             ]);
             flash('Stock adjusted by ' . ($delta > 0 ? '+' : '') . $delta . '.');
         }
 
+        // Only reached if change_stock() didn't throw, so failed changes are never saved
         save_data();
     } catch (RuntimeException $ex) {
         flash($ex->getMessage(), 'error');
@@ -52,10 +56,9 @@ if (is_post()) {
     redirect("stock.php?variant=$variantId");
 }
 
-// All variants for the picker
 $allVariants = variant_list();
 
-// Details + history for the selected variant
+// Find the selected variant and load its 10 most recent movements
 $selected  = null;
 $movements = [];
 foreach ($allVariants as $v) {
@@ -73,6 +76,7 @@ include __DIR__ . '/includes/header.php';
     <h1>Stock</h1>
 </div>
 
+<!-- Picker submits automatically on change; the button is a fallback when JS is disabled -->
 <form method="get" class="filters">
     <select name="variant" onchange="this.form.submit()" class="grow">
         <option value="">Choose a part…</option>
@@ -97,6 +101,7 @@ include __DIR__ . '/includes/header.php';
     </p>
 
     <div class="grid-2">
+        <!-- Restock: incoming stock from a supplier, with cost -->
         <section class="card">
             <h2>Restock</h2>
             <form method="post" class="form">
@@ -120,6 +125,7 @@ include __DIR__ . '/includes/header.php';
             </form>
         </section>
 
+        <!-- Adjust: manual corrections (damage, miscount, etc.) -->
         <section class="card">
             <h2>Adjust</h2>
             <form method="post" class="form">
@@ -153,6 +159,7 @@ include __DIR__ . '/includes/header.php';
 
     <section class="card">
         <h2>Recent movements</h2>
+        <!-- Hide the Part column in the shared table, since every row is this variant -->
         <?php $showPart = false; ?>
         <?php include __DIR__ . '/includes/movements_table.php'; ?>
     </section>

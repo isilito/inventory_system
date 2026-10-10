@@ -1,6 +1,6 @@
 <?php
 /**
- * restocks.php — Restock history
+ * restocks.php - Restock history
  * Every restock with supplier and cost, filterable by date and supplier.
  */
 
@@ -16,17 +16,20 @@ $restocks   = [];
 $totalUnits = 0;
 $totalSpent = 0.0;
 
+// Only movements of type 'restock'; filters and totals are applied in the same pass
 foreach (movement_list(null, 'restock') as $r) {
-    $day = substr($r['created_at'], 0, 10); // "YYYY-MM-DD"
+    // Date-only part of the timestamp, so string comparison with the date filters works (YYYY-MM-DD)
+    $day = substr($r['created_at'], 0, 10);
 
-    // Skip anything outside the filters
     if (($from !== '' && $day < $from) || ($to !== '' && $day > $to)) {
         continue;
     }
+    // Supplier filter is a case-insensitive partial match
     if ($supplier !== '' && stripos($r['supplier'], $supplier) === false) {
         continue;
     }
 
+    // Totals only include rows that passed the filters
     $restocks[]  = $r;
     $totalUnits += $r['qty_change'];
     $totalSpent += $r['qty_change'] * $r['unit_cost'];

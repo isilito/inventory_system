@@ -1,7 +1,7 @@
 <?php
 /**
- * item_view.php — Item detail
- * Shows an item's variants (variant tracking), lets you add/edit/delete
+ * item_view.php - Item detail
+ * Shows an item's variants, lets you add/edit/delete
  * variants, and lists the item's stock history.
  */
 
@@ -15,7 +15,7 @@ if ($item === null) {
     redirect('items.php');
 }
 
-// Handle variant and item actions
+// Handle variant and item actions, then redirect so a refresh doesn't resubmit
 if (is_post()) {
     $action = $_POST['action'] ?? '';
 
@@ -38,12 +38,14 @@ if (is_post()) {
                     throw new RuntimeException('Cost and price cannot be negative.');
                 }
 
+                // Only update if the variant exists and belongs to this item; otherwise add a new one
                 $existing = find_row('variants', $variantId);
                 if ($existing !== null && $existing['item_id'] === $id) {
-                    // Quantity is never edited here — use Stock so the change is logged
+                    // Quantity is never edited here, use Stock so the change is logged
                     update_row('variants', $variantId, $fields);
                     flash('Variant updated.');
                 } else {
+                    // Insert at 0, then add opening stock via change_stock() so it appears in the history
                     $newId = insert_row('variants', ['item_id' => $id, 'quantity' => 0] + $fields);
                     $qty   = max(0, (int) ($_POST['quantity'] ?? 0));
                     if ($qty > 0) {
@@ -55,6 +57,7 @@ if (is_post()) {
                 break;
 
             case 'delete_variant':
+                // Ownership check prevents deleting a variant that belongs to another item
                 $variant = find_row('variants', (int) ($_POST['variant_id'] ?? 0));
                 if ($variant !== null && $variant['item_id'] === $id) {
                     delete_variant($variant['id']);
@@ -70,7 +73,7 @@ if (is_post()) {
                 redirect('items.php');
         }
     } catch (RuntimeException $ex) {
-        // Nothing was saved, so the data file is unchanged
+        // Validation failed before anything was saved, so the data file is unchanged
         flash($ex->getMessage(), 'error');
     }
 
@@ -79,7 +82,7 @@ if (is_post()) {
 
 $variants = item_variants($id);
 
-// Variant currently being edited
+// Variant loaded into the form when editing (?edit_variant=ID)
 $editVariant = null;
 $editId = (int) ($_GET['edit_variant'] ?? 0);
 foreach ($variants as $v) {
@@ -89,7 +92,6 @@ foreach ($variants as $v) {
     }
 }
 
-// Totals across variants
 $totalQty   = 0;
 $totalValue = 0.0;
 foreach ($variants as $v) {
@@ -97,6 +99,7 @@ foreach ($variants as $v) {
     $totalValue += $v['quantity'] * $v['unit_cost'];
 }
 
+// Latest 20 stock movements across all of this item's variants
 $movements = array_slice(movement_list(array_column($variants, 'id')), 0, 20);
 
 $pageTitle = $item['name'];
@@ -163,6 +166,7 @@ include __DIR__ . '/includes/header.php';
     <?php endif; ?>
 </section>
 
+<!-- One form for both add and edit; a hidden variant_id of 0 means "new" -->
 <section class="card" id="variant-form">
     <h2><?= $editVariant ? 'Edit variant' : 'Add variant' ?></h2>
     <form method="post" class="form">
@@ -175,6 +179,7 @@ include __DIR__ . '/includes/header.php';
             <label>SKU
                 <input type="text" name="sku" value="<?= e($editVariant['sku'] ?? '') ?>">
             </label>
+            <!-- Opening qty is only offered for new variants -->
             <?php if (!$editVariant): ?>
                 <label>Opening qty
                     <input type="number" name="quantity" min="0" value="0">
@@ -202,6 +207,7 @@ include __DIR__ . '/includes/header.php';
 
 <section class="card">
     <h2>Stock history</h2>
+    <!-- Hide the Part column in the shared table, since every row is this item -->
     <?php $showPart = false; ?>
     <?php include __DIR__ . '/includes/movements_table.php'; ?>
 </section>

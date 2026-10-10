@@ -1,6 +1,6 @@
 <?php
 /**
- * items.php — Item list
+ * items.php - Item list
  * Search and filter items by category, status tag and stock level.
  */
 
@@ -36,7 +36,7 @@ foreach (rows('items') as $item) {
         continue;
     }
 
-    // Totals and how many variants are low / out
+    // "Out" (0 or less) and "low" (at or below threshold) are counted separately
     $totalQty = 0;
     $lowCount = 0;
     $outCount = 0;
@@ -49,6 +49,7 @@ foreach (rows('items') as $item) {
         }
     }
 
+    // An item matches if at least one of its variants is low / out
     $keep = match ($stockLevel) {
         'low'   => $lowCount > 0,
         'out'   => $outCount > 0,
@@ -58,7 +59,7 @@ foreach (rows('items') as $item) {
         continue;
     }
 
-    // Item-level stock badge: worst status among its variants
+    // Item-level badge reflects the worst case among its variants
     if (!$variants) {
         $stock = ['No variants', 'muted'];
     } elseif ($totalQty <= 0) {
@@ -81,6 +82,7 @@ usort($items, fn($a, $b) => [$a['category'], $a['name']] <=> [$b['category'], $b
 $categories = rows('categories');
 usort($categories, fn($a, $b) => strcasecmp($a['name'], $b['name']));
 
+// Controls the empty-state message and the "Clear" button
 $isFiltered = $search !== '' || $categoryId > 0 || $tag !== '' || $stockLevel !== '';
 
 include __DIR__ . '/includes/header.php';

@@ -1,6 +1,6 @@
 <?php
 /**
- * item_form.php — Item registration (create & edit)
+ * item_form.php - Item registration
  * New items are created together with their first variant.
  */
 
@@ -10,14 +10,14 @@ $id     = (int) ($_GET['id'] ?? 0);
 $isEdit = $id > 0;
 $errors = [];
 
-// Load the item when editing
 $item = $isEdit ? find_row('items', $id) : null;
 if ($isEdit && $item === null) {
     flash('Item not found.', 'error');
     redirect('items.php');
 }
 
-// Form values: posted data > existing item > defaults
+// Form values: posted data > existing item > defaults.
+// The variant fields only apply when creating a new item.
 $form = [
     'name'          => $item['name'] ?? '',
     'brand'         => $item['brand'] ?? '',
@@ -39,7 +39,6 @@ if (is_post()) {
         $form[$key] = trim($_POST[$key] ?? (string) $default);
     }
 
-    // Validation
     if ($form['name'] === '') {
         $errors[] = 'Item name is required.';
     }
@@ -57,6 +56,7 @@ if (is_post()) {
 
     if (!$errors) {
         $fields = [
+            // Empty selection means "uncategorized"
             'category_id' => $form['category_id'] !== '' ? (int) $form['category_id'] : null,
             'name'        => $form['name'],
             'brand'       => $form['brand'],
@@ -71,9 +71,9 @@ if (is_post()) {
             redirect("item_view.php?id=$id");
         }
 
-        // Create the item and its first variant
         $newId = insert_row('items', $fields + ['created_at' => date('Y-m-d H:i:s')]);
 
+        // Quantity starts at 0 here; the opening stock is added below via change_stock()
         $variantId = insert_row('variants', [
             'item_id'       => $newId,
             'label'         => $form['label'],
@@ -84,7 +84,7 @@ if (is_post()) {
             'low_threshold' => max(0, (int) $form['low_threshold']),
         ]);
 
-        // Log the opening quantity so it shows in the stock history
+        // Going through change_stock() logs the opening quantity in the stock history
         if ((int) $form['quantity'] > 0) {
             change_stock($variantId, (int) $form['quantity'], 'initial', ['reason' => 'Opening stock count']);
         }
@@ -142,6 +142,7 @@ include __DIR__ . '/includes/header.php';
         <textarea name="notes" rows="2" placeholder="Optional"><?= e($form['notes']) ?></textarea>
     </label>
 
+    <!-- Variant fields are only shown when creating; existing variants are managed elsewhere -->
     <?php if (!$isEdit): ?>
         <h2>First variant</h2>
         <p class="muted small">You can add more variants (capacity, color, model…) after saving.</p>

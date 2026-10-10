@@ -1,6 +1,6 @@
 <?php
 /**
- * valuation.php — Inventory valuation
+ * valuation.php - Inventory valuation
  * Stock value at cost and at retail, broken down by category,
  * plus the most valuable parts on the shelf.
  */
@@ -11,7 +11,7 @@ $pageTitle = 'Valuation';
 
 $variants = variant_list();
 
-// Group variants by category and add up their value
+// Single pass: per-category rows and grand totals. "Cost" is what we paid, "retail" is the selling price
 $rows  = [];
 $grand = ['units' => 0, 'cost' => 0.0, 'retail' => 0.0];
 
@@ -28,12 +28,13 @@ foreach ($variants as $v) {
     $grand['cost']   += $v['quantity'] * $v['unit_cost'];
     $grand['retail'] += $v['quantity'] * $v['sell_price'];
 }
+// Profit if everything sells at the listed price
 $grandProfit = $grand['retail'] - $grand['cost'];
 
-// Most valuable categories first
+// Categories with the most money tied up come first
 usort($rows, fn($a, $b) => $b['cost_value'] <=> $a['cost_value']);
 
-// Rank in-stock variants by value, then take the top 10
+// Rank in-stock variants by cost value (out-of-stock ones are worth 0, so skip them)
 $ranked = [];
 foreach ($variants as $v) {
     if ($v['quantity'] > 0) {
@@ -43,6 +44,7 @@ foreach ($variants as $v) {
 }
 usort($ranked, fn($a, $b) => $b['value'] <=> $a['value']);
 
+// Keep only the top 10
 $topParts = [];
 while (count($topParts) < 10 && $ranked) {
     $topParts[] = array_shift($ranked);
@@ -62,6 +64,7 @@ while (count($topParts) < 10 && $ranked) {
     <div class="stat">
         <span class="stat-label">Potential profit</span>
         <span class="stat-value"><?= money($grandProfit) ?></span>
+        <!-- Margin is profit as a percentage of retail; guarded against dividing by zero -->
         <span class="stat-sub"><?= $grand['retail'] > 0 ? number_format($grandProfit / $grand['retail'] * 100, 1) : '0.0' ?>% margin</span>
     </div>
 </section>
@@ -78,6 +81,7 @@ while (count($topParts) < 10 && $ranked) {
                 </thead>
                 <tbody>
                 <?php foreach ($rows as $r): ?>
+                    <?php // Share of total cost value, drives the bar width ?>
                     <?php $share = $grand['cost'] > 0 ? $r['cost_value'] / $grand['cost'] * 100 : 0; ?>
                     <tr>
                         <td><?= e($r['category']) ?></td>

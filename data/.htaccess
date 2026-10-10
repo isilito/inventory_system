@@ -1,0 +1,2 @@
+# Block direct downloads of the SQLite database
+Require all denied

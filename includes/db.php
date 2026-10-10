@@ -8,7 +8,7 @@
 require_once __DIR__ . '/../config.php';
 
 /**
- * Returns the shared PDO connection (one per request).
+ * Returns the shared PDO connection
  */
 function db(): PDO
 {

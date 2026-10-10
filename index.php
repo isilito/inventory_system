@@ -1,28 +1,29 @@
 <?php
 /**
- * index.php — Dashboard overview
+ * index.php - Dashboard overview
  * Headline numbers and low-stock alerts.
  */
 
 require_once __DIR__ . '/includes/bootstrap.php';
 
+// Used by header.php for the page title
 $pageTitle = 'Dashboard';
 
-// Add up totals and collect variants at or below their threshold
+// Totals across all variants, plus the ones at or below their threshold
 $units     = 0;
 $costValue = 0.0;
 $lowStock  = [];
 
 foreach (variant_list() as $v) {
     $units     += $v['quantity'];
-    $costValue += $v['quantity'] * $v['unit_cost'];
+    $costValue += $v['quantity'] * $v['unit_cost']; // Value is based on cost, not selling price
 
     if ($v['quantity'] <= $v['low_threshold']) {
         $lowStock[] = $v;
     }
 }
 
-// Emptiest first
+// Most urgent first (out-of-stock variants appear at the top)
 usort($lowStock, fn($a, $b) => $a['quantity'] <=> $b['quantity']);
 
 include __DIR__ . '/includes/header.php';
@@ -33,6 +34,7 @@ include __DIR__ . '/includes/header.php';
     <a class="btn primary" href="item_form.php">+ New item</a>
 </div>
 
+<!-- Headline numbers -->
 <section class="stats">
     <div class="stat">
         <span class="stat-label">Items</span>
@@ -48,10 +50,12 @@ include __DIR__ . '/includes/header.php';
     </div>
     <div class="stat">
         <span class="stat-label">Needs restock</span>
+        <!-- Highlighted when at least one variant is low -->
         <span class="stat-value <?= $lowStock ? 'text-low' : '' ?>"><?= count($lowStock) ?></span>
     </div>
 </section>
 
+<!-- Low-stock list -->
 <section class="card">
     <h2>Low stock</h2>
     <?php if (!$lowStock): ?>
@@ -71,6 +75,7 @@ include __DIR__ . '/includes/header.php';
                         <td><?= badge($label, $class) ?></td>
                         <td class="num"><?= $v['quantity'] ?></td>
                         <td class="num muted"><?= $v['low_threshold'] ?></td>
+                        <!-- Links straight to the stock page for this variant -->
                         <td class="num"><a href="stock.php?variant=<?= $v['id'] ?>">Restock</a></td>
                     </tr>
                 <?php endforeach; ?>

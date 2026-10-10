@@ -1,6 +1,6 @@
 <?php
 /**
- * categories.php — Part categorization
+ * categories.php - Part categorization
  * Add, rename and delete the categories that items are grouped into.
  */
 
@@ -8,7 +8,7 @@ require_once __DIR__ . '/includes/bootstrap.php';
 
 $pageTitle = 'Categories';
 
-// Handle form submissions
+// Handle add / edit / delete submissions, then redirect so a refresh doesn't resubmit
 if (is_post()) {
     $action      = $_POST['action'] ?? '';
     $id          = (int) ($_POST['id'] ?? 0);
@@ -17,7 +17,7 @@ if (is_post()) {
 
     switch ($action) {
         case 'save':
-            // Names must be filled in and unique (case-insensitive)
+            // Names must be unique (case-insensitive), ignoring the category being edited
             $duplicate = false;
             foreach (rows('categories') as $c) {
                 if (strcasecmp($c['name'], $name) === 0 && $c['id'] !== $id) {
@@ -41,6 +41,7 @@ if (is_post()) {
             break;
 
         case 'delete':
+            // Items in the deleted category are kept but become uncategorized
             delete_category($id);
             save_data();
             flash('Category deleted. Its items are now uncategorized.');
@@ -50,10 +51,10 @@ if (is_post()) {
     redirect('categories.php');
 }
 
-// Category being edited (if any)
+// Category loaded into the form when editing (?edit=ID)
 $editing = isset($_GET['edit']) ? find_row('categories', (int) $_GET['edit']) : null;
 
-// Item count, units and value per category
+// Per-category totals: item count, units and cost value
 $stats = [];
 foreach (rows('categories') as $id => $c) {
     $stats[$id] = ['items' => 0, 'units' => 0, 'value' => 0.0];
@@ -63,6 +64,7 @@ foreach (rows('items') as $item) {
         $stats[$item['category_id']]['items']++;
     }
 }
+// Units and value come from variants, since that's where quantity is stored
 foreach (variant_list() as $v) {
     if (isset($stats[$v['category_id']])) {
         $stats[$v['category_id']]['units'] += $v['quantity'];
@@ -70,6 +72,7 @@ foreach (variant_list() as $v) {
     }
 }
 
+// Alphabetical for display
 $categories = rows('categories');
 usort($categories, fn($a, $b) => strcasecmp($a['name'], $b['name']));
 
@@ -118,6 +121,7 @@ include __DIR__ . '/includes/header.php';
         <?php endif; ?>
     </section>
 
+    <!-- One form for both add and edit; a hidden id of 0 means "new" -->
     <section class="card">
         <h2><?= $editing ? 'Edit category' : 'Add category' ?></h2>
         <form method="post" class="form">
