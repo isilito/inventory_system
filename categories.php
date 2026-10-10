@@ -6,7 +6,6 @@
 
 require_once __DIR__ . '/includes/bootstrap.php';
 
-$pdo = db();
 $pageTitle = 'Categories';
 
 // Handle form submissions
@@ -18,28 +17,32 @@ if (is_post()) {
 
     switch ($action) {
         case 'save':
+            // Names must be filled in and unique (case-insensitive)
+            $duplicate = false;
+            foreach (rows('categories') as $c) {
+                if (strcasecmp($c['name'], $name) === 0 && $c['id'] !== $id) {
+                    $duplicate = true;
+                }
+            }
+
             if ($name === '') {
                 flash('Category name is required.', 'error');
-                redirect('categories.php' . ($id > 0 ? "?edit=$id" : ''));
-            }
-            try {
-                if ($id > 0) {
-                    $pdo->prepare('UPDATE categories SET name = ?, description = ? WHERE id = ?')
-                        ->execute([$name, $description, $id]);
-                    flash("Category \"$name\" updated.");
-                } else {
-                    $pdo->prepare('INSERT INTO categories (name, description) VALUES (?, ?)')
-                        ->execute([$name, $description]);
-                    flash("Category \"$name\" added.");
-                }
-            } catch (PDOException $ex) {
-                // UNIQUE constraint on name
+            } elseif ($duplicate) {
                 flash('A category with that name already exists.', 'error');
+            } elseif ($id > 0) {
+                update_row('categories', $id, ['name' => $name, 'description' => $description]);
+                save_data();
+                flash("Category \"$name\" updated.");
+            } else {
+                insert_row('categories', ['name' => $name, 'description' => $description]);
+                save_data();
+                flash("Category \"$name\" added.");
             }
             break;
 
         case 'delete':
-            $pdo->prepare('DELETE FROM categories WHERE id = ?')->execute([$id]);
+            delete_category($id);
+            save_data();
             flash('Category deleted. Its items are now uncategorized.');
             break;
     }
@@ -48,24 +51,27 @@ if (is_post()) {
 }
 
 // Category being edited (if any)
-$editing = null;
-if (isset($_GET['edit'])) {
-    $stmt = $pdo->prepare('SELECT * FROM categories WHERE id = ?');
-    $stmt->execute([(int) $_GET['edit']]);
-    $editing = $stmt->fetch() ?: null;
+$editing = isset($_GET['edit']) ? find_row('categories', (int) $_GET['edit']) : null;
+
+// Item count, units and value per category
+$stats = [];
+foreach (rows('categories') as $id => $c) {
+    $stats[$id] = ['items' => 0, 'units' => 0, 'value' => 0.0];
+}
+foreach (rows('items') as $item) {
+    if (isset($stats[$item['category_id']])) {
+        $stats[$item['category_id']]['items']++;
+    }
+}
+foreach (variant_list() as $v) {
+    if (isset($stats[$v['category_id']])) {
+        $stats[$v['category_id']]['units'] += $v['quantity'];
+        $stats[$v['category_id']]['value'] += $v['quantity'] * $v['unit_cost'];
+    }
 }
 
-$categories = $pdo->query(
-    'SELECT c.*,
-            COUNT(DISTINCT i.id)                       AS item_count,
-            COALESCE(SUM(v.quantity), 0)               AS units,
-            COALESCE(SUM(v.quantity * v.unit_cost), 0) AS value
-     FROM categories c
-     LEFT JOIN items i    ON i.category_id = c.id
-     LEFT JOIN variants v ON v.item_id = i.id
-     GROUP BY c.id
-     ORDER BY c.name'
-)->fetchAll();
+$categories = rows('categories');
+usort($categories, fn($a, $b) => strcasecmp($a['name'], $b['name']));
 
 include __DIR__ . '/includes/header.php';
 ?>
@@ -88,19 +94,19 @@ include __DIR__ . '/includes/header.php';
                     <?php foreach ($categories as $c): ?>
                         <tr>
                             <td>
-                                <a href="items.php?category=<?= (int) $c['id'] ?>"><?= e($c['name']) ?></a>
+                                <a href="items.php?category=<?= $c['id'] ?>"><?= e($c['name']) ?></a>
                                 <?php if ($c['description'] !== ''): ?>
                                     <div class="muted small"><?= e($c['description']) ?></div>
                                 <?php endif; ?>
                             </td>
-                            <td class="num"><?= (int) $c['item_count'] ?></td>
-                            <td class="num"><?= (int) $c['units'] ?></td>
-                            <td class="num"><?= money($c['value']) ?></td>
+                            <td class="num"><?= $stats[$c['id']]['items'] ?></td>
+                            <td class="num"><?= $stats[$c['id']]['units'] ?></td>
+                            <td class="num"><?= money($stats[$c['id']]['value']) ?></td>
                             <td class="num nowrap">
-                                <a class="btn small" href="categories.php?edit=<?= (int) $c['id'] ?>">Edit</a>
+                                <a class="btn small" href="categories.php?edit=<?= $c['id'] ?>">Edit</a>
                                 <form method="post" class="inline" onsubmit="return confirm('Delete this category? Items will become uncategorized.');">
                                     <input type="hidden" name="action" value="delete">
-                                    <input type="hidden" name="id" value="<?= (int) $c['id'] ?>">
+                                    <input type="hidden" name="id" value="<?= $c['id'] ?>">
                                     <button class="btn small danger">Delete</button>
                                 </form>
                             </td>
@@ -116,7 +122,7 @@ include __DIR__ . '/includes/header.php';
         <h2><?= $editing ? 'Edit category' : 'Add category' ?></h2>
         <form method="post" class="form">
             <input type="hidden" name="action" value="save">
-            <input type="hidden" name="id" value="<?= (int) ($editing['id'] ?? 0) ?>">
+            <input type="hidden" name="id" value="<?= $editing['id'] ?? 0 ?>">
             <label>Name
                 <input type="text" name="name" required value="<?= e($editing['name'] ?? '') ?>" placeholder="e.g. Graphics Cards">
             </label>

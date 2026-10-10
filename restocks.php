@@ -6,44 +6,28 @@
 
 require_once __DIR__ . '/includes/bootstrap.php';
 
-$pdo = db();
 $pageTitle = 'Restock history';
 
 $from     = $_GET['from'] ?? '';
 $to       = $_GET['to'] ?? '';
 $supplier = trim($_GET['supplier'] ?? '');
 
-$where  = ["m.type = 'restock'"];
-$params = [];
-
-if ($from !== '') {
-    $where[]  = 'date(m.created_at) >= ?';
-    $params[] = $from;
-}
-if ($to !== '') {
-    $where[]  = 'date(m.created_at) <= ?';
-    $params[] = $to;
-}
-if ($supplier !== '') {
-    $where[]  = 'm.supplier LIKE ?';
-    $params[] = '%' . $supplier . '%';
-}
-
-$stmt = $pdo->prepare(
-    'SELECT m.*, v.label, v.item_id, i.name AS item_name
-     FROM stock_movements m
-     JOIN variants v ON v.id = m.variant_id
-     JOIN items i ON i.id = v.item_id
-     WHERE ' . implode(' AND ', $where) . '
-     ORDER BY m.created_at DESC, m.id DESC'
-);
-$stmt->execute($params);
-$restocks = $stmt->fetchAll();
-
-// Totals for the summary line
+$restocks   = [];
 $totalUnits = 0;
 $totalSpent = 0.0;
-foreach ($restocks as $r) {
+
+foreach (movement_list(null, 'restock') as $r) {
+    $day = substr($r['created_at'], 0, 10); // "YYYY-MM-DD"
+
+    // Skip anything outside the filters
+    if (($from !== '' && $day < $from) || ($to !== '' && $day > $to)) {
+        continue;
+    }
+    if ($supplier !== '' && stripos($r['supplier'], $supplier) === false) {
+        continue;
+    }
+
+    $restocks[]  = $r;
     $totalUnits += $r['qty_change'];
     $totalSpent += $r['qty_change'] * $r['unit_cost'];
 }
@@ -78,10 +62,10 @@ include __DIR__ . '/includes/header.php';
                     <tr>
                         <td class="nowrap muted"><?= e(nice_date($r['created_at'])) ?></td>
                         <td>
-                            <a href="item_view.php?id=<?= (int) $r['item_id'] ?>"><?= e($r['item_name']) ?></a>
+                            <a href="item_view.php?id=<?= $r['item_id'] ?>"><?= e($r['item_name']) ?></a>
                             <span class="muted">· <?= e($r['label']) ?></span>
                         </td>
-                        <td class="num">+<?= (int) $r['qty_change'] ?></td>
+                        <td class="num">+<?= $r['qty_change'] ?></td>
                         <td class="num"><?= money($r['unit_cost']) ?></td>
                         <td class="num"><?= money($r['qty_change'] * $r['unit_cost']) ?></td>
                         <td><?= e($r['supplier'] ?: '—') ?></td>

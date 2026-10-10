@@ -7,7 +7,6 @@
 
 require_once __DIR__ . '/includes/bootstrap.php';
 
-$pdo = db();
 $pageTitle = 'Stock';
 
 // Selected variant comes from the form (POST) or the link (GET)
@@ -21,8 +20,6 @@ if (is_post()) {
         if ($qty <= 0) {
             throw new RuntimeException('Enter a quantity greater than zero.');
         }
-
-        $pdo->beginTransaction();
 
         if ($action === 'restock') {
             $cost = (float) ($_POST['unit_cost'] ?? 0);
@@ -47,11 +44,8 @@ if (is_post()) {
             flash('Stock adjusted by ' . ($delta > 0 ? '+' : '') . $delta . '.');
         }
 
-        $pdo->commit();
+        save_data();
     } catch (RuntimeException $ex) {
-        if ($pdo->inTransaction()) {
-            $pdo->rollBack();
-        }
         flash($ex->getMessage(), 'error');
     }
 
@@ -59,35 +53,16 @@ if (is_post()) {
 }
 
 // All variants for the picker
-$allVariants = $pdo->query(
-    'SELECT v.id, v.label, v.quantity, i.name AS item_name
-     FROM variants v JOIN items i ON i.id = v.item_id
-     ORDER BY i.name, v.label'
-)->fetchAll();
+$allVariants = variant_list();
 
 // Details + history for the selected variant
 $selected  = null;
 $movements = [];
-if ($variantId > 0) {
-    $stmt = $pdo->prepare(
-        'SELECT v.*, i.name AS item_name, i.status
-         FROM variants v JOIN items i ON i.id = v.item_id WHERE v.id = ?'
-    );
-    $stmt->execute([$variantId]);
-    $selected = $stmt->fetch() ?: null;
-
-    if ($selected) {
-        $stmt = $pdo->prepare(
-            'SELECT m.*, v.label, v.item_id, i.name AS item_name
-             FROM stock_movements m
-             JOIN variants v ON v.id = m.variant_id
-             JOIN items i ON i.id = v.item_id
-             WHERE m.variant_id = ?
-             ORDER BY m.created_at DESC, m.id DESC
-             LIMIT 10'
-        );
-        $stmt->execute([$variantId]);
-        $movements = $stmt->fetchAll();
+foreach ($allVariants as $v) {
+    if ($v['id'] === $variantId) {
+        $selected  = $v;
+        $movements = array_slice(movement_list([$variantId]), 0, 10);
+        break;
     }
 }
 

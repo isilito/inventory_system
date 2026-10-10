@@ -14,9 +14,9 @@ define('CURRENCY', '$');
 // Timezone used for all timestamps (change to your local timezone, e.g. 'Asia/Manila')
 date_default_timezone_set('UTC');
 
-// SQLite database file — created automatically (with sample data) on first run.
-// Delete this file to reset the system.
-define('DB_PATH', __DIR__ . '/data/inventory.sqlite');
+// Data file — a PHP file that returns an array. Created automatically
+// (with sample data) on first run. Delete it to reset the system.
+define('DATA_FILE', __DIR__ . '/data/inventory.php');
 
 // Default low-stock threshold for new variants
 define('DEFAULT_THRESHOLD', 2);

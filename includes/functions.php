@@ -98,24 +98,120 @@ function badge(string $label, string $class): string
     return '<span class="badge ' . e($class) . '">' . e($label) . '</span>';
 }
 
+/* ---------- Lookups ---------- */
+
+function category_name(?int $categoryId): string
+{
+    $category = $categoryId ? find_row('categories', $categoryId) : null;
+    return $category['name'] ?? 'Uncategorized';
+}
+
+// Variants of one item, in the order they were added
+function item_variants(int $itemId): array
+{
+    return array_values(array_filter(rows('variants'), fn($v) => $v['item_id'] === $itemId));
+}
+
+/**
+ * Every variant with its item's name and category attached,
+ * sorted by item name then variant label.
+ */
+function variant_list(): array
+{
+    $items = rows('items');
+    $list  = [];
+
+    foreach (rows('variants') as $v) {
+        $item = $items[$v['item_id']] ?? null;
+        if ($item === null) {
+            continue;
+        }
+        $v['item_name']   = $item['name'];
+        $v['category_id'] = $item['category_id'];
+        $list[] = $v;
+    }
+
+    usort($list, fn($a, $b) => [$a['item_name'], $a['label']] <=> [$b['item_name'], $b['label']]);
+    return $list;
+}
+
+/**
+ * Stock movements, newest first, with item/variant names attached.
+ * Optionally limited to some variant ids and/or one movement type.
+ */
+function movement_list(?array $variantIds = null, ?string $type = null): array
+{
+    $variants = rows('variants');
+    $items    = rows('items');
+    $list     = [];
+
+    foreach (rows('movements') as $m) {
+        if ($variantIds !== null && !in_array($m['variant_id'], $variantIds, true)) {
+            continue;
+        }
+        if ($type !== null && $m['type'] !== $type) {
+            continue;
+        }
+        $variant = $variants[$m['variant_id']] ?? null;
+        if ($variant === null) {
+            continue;
+        }
+        $m['label']     = $variant['label'];
+        $m['item_id']   = $variant['item_id'];
+        $m['item_name'] = $items[$variant['item_id']]['name'] ?? '';
+        $list[] = $m;
+    }
+
+    usort($list, fn($a, $b) => [$b['created_at'], $b['id']] <=> [$a['created_at'], $a['id']]);
+    return $list;
+}
+
+/* ---------- Deleting (with clean-up of related rows) ---------- */
+
+function delete_variant(int $variantId): void
+{
+    foreach (rows('movements') as $m) {
+        if ($m['variant_id'] === $variantId) {
+            delete_row('movements', $m['id']);
+        }
+    }
+    delete_row('variants', $variantId);
+}
+
+function delete_item(int $itemId): void
+{
+    foreach (item_variants($itemId) as $v) {
+        delete_variant($v['id']);
+    }
+    delete_row('items', $itemId);
+}
+
+// Items in a deleted category become uncategorized
+function delete_category(int $categoryId): void
+{
+    foreach (rows('items') as $item) {
+        if ($item['category_id'] === $categoryId) {
+            update_row('items', $item['id'], ['category_id' => null]);
+        }
+    }
+    delete_row('categories', $categoryId);
+}
+
 /* ---------- Stock logic ---------- */
 
 /**
  * Changes a variant's stock by $delta and logs the movement.
  * Restocks also update the variant's cost using a weighted average.
+ * Changes are in memory — call save_data() afterwards to keep them.
  *
  * $extra keys: unit_cost, supplier, reason, created_at
  * Returns the new quantity. Throws RuntimeException on invalid changes.
  */
 function change_stock(int $variantId, int $delta, string $type, array $extra = []): int
 {
-    $pdo = db();
+    $variant = find_row('variants', $variantId);
 
-    $stmt = $pdo->prepare('SELECT quantity, unit_cost FROM variants WHERE id = ?');
-    $stmt->execute([$variantId]);
-    $variant = $stmt->fetch();
-
-    if ($variant === false) {
+    if ($variant === null) {
         throw new RuntimeException('Part variant not found.');
     }
     if ($delta === 0) {
@@ -135,22 +231,20 @@ function change_stock(int $variantId, int $delta, string $type, array $extra = [
         $avgCost = (($oldQty * $avgCost) + ($delta * (float) $extra['unit_cost'])) / $newQty;
     }
 
-    $pdo->prepare('UPDATE variants SET quantity = ?, unit_cost = ? WHERE id = ?')
-        ->execute([$newQty, round($avgCost, 2), $variantId]);
+    update_row('variants', $variantId, [
+        'quantity'  => $newQty,
+        'unit_cost' => round($avgCost, 2),
+    ]);
 
-    $pdo->prepare(
-        'INSERT INTO stock_movements
-            (variant_id, type, qty_change, qty_after, unit_cost, supplier, reason, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    )->execute([
-        $variantId,
-        $type,
-        $delta,
-        $newQty,
-        $extra['unit_cost'] ?? (float) $variant['unit_cost'],
-        $extra['supplier'] ?? '',
-        $extra['reason'] ?? '',
-        $extra['created_at'] ?? date('Y-m-d H:i:s'),
+    insert_row('movements', [
+        'variant_id' => $variantId,
+        'type'       => $type,
+        'qty_change' => $delta,
+        'qty_after'  => $newQty,
+        'unit_cost'  => (float) ($extra['unit_cost'] ?? $variant['unit_cost']),
+        'supplier'   => $extra['supplier'] ?? '',
+        'reason'     => $extra['reason'] ?? '',
+        'created_at' => $extra['created_at'] ?? date('Y-m-d H:i:s'),
     ]);
 
     return $newQty;

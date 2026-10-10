@@ -7,42 +7,47 @@
 
 require_once __DIR__ . '/includes/bootstrap.php';
 
-$pdo = db();
 $pageTitle = 'Valuation';
 
-$stmt = $pdo->query(
-    "SELECT COALESCE(c.name, 'Uncategorized')           AS category,
-            COUNT(v.id)                                 AS variants,
-            COALESCE(SUM(v.quantity), 0)                AS units,
-            COALESCE(SUM(v.quantity * v.unit_cost), 0)  AS cost_value,
-            COALESCE(SUM(v.quantity * v.sell_price), 0) AS retail_value
-     FROM variants v
-     JOIN items i ON i.id = v.item_id
-     LEFT JOIN categories c ON c.id = i.category_id
-     GROUP BY c.id
-     ORDER BY cost_value DESC"
-);
+$variants = variant_list();
 
-// Read rows one at a time and add up grand totals as we go
+// Group variants by category and add up their value
 $rows  = [];
 $grand = ['units' => 0, 'cost' => 0.0, 'retail' => 0.0];
-while ($row = $stmt->fetch()) {
-    $rows[] = $row;
-    $grand['units']  += $row['units'];
-    $grand['cost']   += $row['cost_value'];
-    $grand['retail'] += $row['retail_value'];
+
+foreach ($variants as $v) {
+    $category = category_name($v['category_id']);
+
+    $rows[$category] ??= ['category' => $category, 'variants' => 0, 'units' => 0, 'cost_value' => 0.0, 'retail_value' => 0.0];
+    $rows[$category]['variants']++;
+    $rows[$category]['units']        += $v['quantity'];
+    $rows[$category]['cost_value']   += $v['quantity'] * $v['unit_cost'];
+    $rows[$category]['retail_value'] += $v['quantity'] * $v['sell_price'];
+
+    $grand['units']  += $v['quantity'];
+    $grand['cost']   += $v['quantity'] * $v['unit_cost'];
+    $grand['retail'] += $v['quantity'] * $v['sell_price'];
 }
 $grandProfit = $grand['retail'] - $grand['cost'];
 
-$topParts = $pdo->query(
-    'SELECT v.*, i.name AS item_name, (v.quantity * v.unit_cost) AS value
-     FROM variants v JOIN items i ON i.id = v.item_id
-     WHERE v.quantity > 0
-     ORDER BY value DESC
-     LIMIT 10'
-)->fetchAll();
+// Most valuable categories first
+usort($rows, fn($a, $b) => $b['cost_value'] <=> $a['cost_value']);
 
-include __DIR__ . '/includes/header.php';
+// Rank in-stock variants by value, then take the top 10
+$ranked = [];
+foreach ($variants as $v) {
+    if ($v['quantity'] > 0) {
+        $v['value'] = $v['quantity'] * $v['unit_cost'];
+        $ranked[]   = $v;
+    }
+}
+usort($ranked, fn($a, $b) => $b['value'] <=> $a['value']);
+
+$topParts = [];
+while (count($topParts) < 10 && $ranked) {
+    $topParts[] = array_shift($ranked);
+}
+
 ?>
 
 <div class="page-head">
