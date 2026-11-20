@@ -59,6 +59,7 @@ Test the Python part on its own from the project folder:
 | **File transfer / manipulation** | `upload_image()` and `delete_image()` in `includes/functions.php` (`move_uploaded_file`, `pathinfo`, `getimagesize`, `mkdir`, `unlink`, `file_exists`); `file_get_contents()` in `db.php`; `copy()` in `seed.php` |
 | **Database connection** | `includes/db.php` — `new mysqli()`, `prepare()`, `bind_param()`, `execute()`, `get_result()`, `multi_query()` |
 | **Password hashing** | `password_hash()` in `signup.php`, `profile.php`, `seed.php`; `password_verify()` in `login.php`, `profile.php` |
+| **Running Python from PHP (chat)** | `chat.php` — `proc_open()`, `fwrite()` / `fgets()` on pipes, `file_get_contents('php://input')`, `json_encode()` / `json_decode()`, `session_write_close()`, `flush()` for streaming |
 
 A full walkthrough of the code is in **PartsBin-Code-Report.pdf**.
 
@@ -75,17 +76,23 @@ A full walkthrough of the code is in **PartsBin-Code-Report.pdf**.
 ## File layout
 
 ```
-config.php                 settings (database, uploads, tags)
+config.php                 settings (database, uploads, tags, Python path, chat limits)
+.env / .env.example        Gemini API key, model, thinking level (.env is private)
+.htaccess                  stops browsers from opening .env
 database.sql               table definitions (run automatically on first visit)
+chat.php                   chat back end: checks the request, runs Python, streams the answer
+ai/gemini_chat.py          Python: asks Google Gemini, prints the answer piece by piece
 includes/bootstrap.php     session + imports, loaded by every page
 includes/db.php            MySQL connection, query helpers, first-run installer
 includes/functions.php     helpers: login, uploads, variants, stock logic
 includes/seed.php          sample data + demo account
 includes/header.php        layout, navigation, user menu
-includes/footer.php
+includes/footer.php        closes the layout, loads the chat widget
 includes/variant_rows.php  the "many variants" input table
 includes/movements_table.php  shared stock history table
-assets/                    style.css, app.js, placeholder + sample pictures
+includes/chat.php          live inventory snapshot + instructions for Gemini
+includes/chat_widget.php   the floating chat button and panel
+assets/                    style.css, app.js, chat.js, placeholder + sample pictures
 uploads/products/          uploaded product pictures
 uploads/avatars/           uploaded profile pictures
 ```
