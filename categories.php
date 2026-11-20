@@ -1,14 +1,15 @@
 <?php
 /**
- * categories.php - Part categorization
- * Add, rename and delete the categories that items are grouped into.
+ * categories.php — Part categorization
+ * Add, rename and delete the categories that products are grouped into.
  */
 
 require_once __DIR__ . '/includes/bootstrap.php';
+require_login();
 
 $pageTitle = 'Categories';
 
-// Handle add / edit / delete submissions, then redirect so a refresh doesn't resubmit
+// ---------- Handle form submissions ----------
 if (is_post()) {
     $action      = $_POST['action'] ?? '';
     $id          = (int) ($_POST['id'] ?? 0);
@@ -17,64 +18,47 @@ if (is_post()) {
 
     switch ($action) {
         case 'save':
-            // Names must be unique (case-insensitive), ignoring the category being edited
-            $duplicate = false;
-            foreach (rows('categories') as $c) {
-                if (strcasecmp($c['name'], $name) === 0 && $c['id'] !== $id) {
-                    $duplicate = true;
-                }
-            }
+            // Names must be filled in and unique
+            $duplicate = db_row('SELECT id FROM categories WHERE name = ? AND id <> ?', 'si', [$name, $id]);
 
             if ($name === '') {
                 flash('Category name is required.', 'error');
             } elseif ($duplicate) {
                 flash('A category with that name already exists.', 'error');
             } elseif ($id > 0) {
-                update_row('categories', $id, ['name' => $name, 'description' => $description]);
-                save_data();
+                db_run('UPDATE categories SET name = ?, description = ? WHERE id = ?', 'ssi', [$name, $description, $id]);
                 flash("Category \"$name\" updated.");
             } else {
-                insert_row('categories', ['name' => $name, 'description' => $description]);
-                save_data();
+                db_run('INSERT INTO categories (name, description) VALUES (?, ?)', 'ss', [$name, $description]);
                 flash("Category \"$name\" added.");
             }
             break;
 
         case 'delete':
-            // Items in the deleted category are kept but become uncategorized
-            delete_category($id);
-            save_data();
-            flash('Category deleted. Its items are now uncategorized.');
+            // Products in this category become uncategorized (ON DELETE SET NULL)
+            db_run('DELETE FROM categories WHERE id = ?', 'i', [$id]);
+            flash('Category deleted. Its products are now uncategorized.');
             break;
     }
 
     redirect('categories.php');
 }
 
-// Category loaded into the form when editing (?edit=ID)
-$editing = isset($_GET['edit']) ? find_row('categories', (int) $_GET['edit']) : null;
+// Category being edited (if any)
+$editing = isset($_GET['edit']) ? db_row('SELECT * FROM categories WHERE id = ?', 'i', [(int) $_GET['edit']]) : null;
 
-// Per-category totals: item count, units and cost value
-$stats = [];
-foreach (rows('categories') as $id => $c) {
-    $stats[$id] = ['items' => 0, 'units' => 0, 'value' => 0.0];
-}
-foreach (rows('items') as $item) {
-    if (isset($stats[$item['category_id']])) {
-        $stats[$item['category_id']]['items']++;
-    }
-}
-// Units and value come from variants, since that's where quantity is stored
-foreach (variant_list() as $v) {
-    if (isset($stats[$v['category_id']])) {
-        $stats[$v['category_id']]['units'] += $v['quantity'];
-        $stats[$v['category_id']]['value'] += $v['quantity'] * $v['unit_cost'];
-    }
-}
-
-// Alphabetical for display
-$categories = rows('categories');
-usort($categories, fn($a, $b) => strcasecmp($a['name'], $b['name']));
+// Product count, units and value per category — one query with LEFT JOINs
+$categories = db_rows(
+    'SELECT c.id, c.name, c.description,
+            COUNT(DISTINCT i.id) AS items,
+            COALESCE(SUM(v.quantity), 0) AS units,
+            COALESCE(SUM(v.quantity * v.unit_cost), 0) AS value
+     FROM categories c
+     LEFT JOIN items i    ON i.category_id = c.id
+     LEFT JOIN variants v ON v.item_id = i.id
+     GROUP BY c.id, c.name, c.description
+     ORDER BY c.name'
+);
 
 include __DIR__ . '/includes/header.php';
 ?>
@@ -91,25 +75,25 @@ include __DIR__ . '/includes/header.php';
             <div class="table-wrap">
                 <table>
                     <thead>
-                    <tr><th>Name</th><th class="num">Items</th><th class="num">Units</th><th class="num">Value</th><th></th></tr>
+                    <tr><th>Name</th><th class="num">Products</th><th class="num">Units</th><th class="num">Value</th><th></th></tr>
                     </thead>
                     <tbody>
                     <?php foreach ($categories as $c): ?>
                         <tr>
                             <td>
-                                <a href="items.php?category=<?= $c['id'] ?>"><?= e($c['name']) ?></a>
+                                <a href="items.php?category=<?= (int) $c['id'] ?>"><?= e($c['name']) ?></a>
                                 <?php if ($c['description'] !== ''): ?>
                                     <div class="muted small"><?= e($c['description']) ?></div>
                                 <?php endif; ?>
                             </td>
-                            <td class="num"><?= $stats[$c['id']]['items'] ?></td>
-                            <td class="num"><?= $stats[$c['id']]['units'] ?></td>
-                            <td class="num"><?= money($stats[$c['id']]['value']) ?></td>
+                            <td class="num"><?= (int) $c['items'] ?></td>
+                            <td class="num"><?= (int) $c['units'] ?></td>
+                            <td class="num"><?= money($c['value']) ?></td>
                             <td class="num nowrap">
-                                <a class="btn small" href="categories.php?edit=<?= $c['id'] ?>">Edit</a>
-                                <form method="post" class="inline" onsubmit="return confirm('Delete this category? Items will become uncategorized.');">
+                                <a class="btn small" href="categories.php?edit=<?= (int) $c['id'] ?>">Edit</a>
+                                <form method="post" class="inline" onsubmit="return confirm('Delete this category? Products will become uncategorized.');">
                                     <input type="hidden" name="action" value="delete">
-                                    <input type="hidden" name="id" value="<?= $c['id'] ?>">
+                                    <input type="hidden" name="id" value="<?= (int) $c['id'] ?>">
                                     <button class="btn small danger">Delete</button>
                                 </form>
                             </td>
@@ -121,12 +105,11 @@ include __DIR__ . '/includes/header.php';
         <?php endif; ?>
     </section>
 
-    <!-- One form for both add and edit; a hidden id of 0 means "new" -->
     <section class="card">
         <h2><?= $editing ? 'Edit category' : 'Add category' ?></h2>
         <form method="post" class="form">
             <input type="hidden" name="action" value="save">
-            <input type="hidden" name="id" value="<?= $editing['id'] ?? 0 ?>">
+            <input type="hidden" name="id" value="<?= (int) ($editing['id'] ?? 0) ?>">
             <label>Name
                 <input type="text" name="name" required value="<?= e($editing['name'] ?? '') ?>" placeholder="e.g. Graphics Cards">
             </label>

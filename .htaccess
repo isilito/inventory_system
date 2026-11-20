@@ -1,0 +1,5 @@
+# Never send the secret settings files to a browser
+# (http://localhost/partsbin/.env would otherwise show your API key)
+<FilesMatch "^\.env">
+    Require all denied
+</FilesMatch>

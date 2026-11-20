@@ -1,0 +1,5 @@
+# Uploaded pictures may be viewed, but nothing in here may ever run as PHP
+<FilesMatch "\.(php|phtml|php\d|phar)$">
+    Require all denied
+</FilesMatch>
+Options -Indexes

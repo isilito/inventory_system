@@ -1,97 +1,106 @@
 <?php
 /**
- * item_view.php - Item detail
- * Shows an item's variants, lets you add/edit/delete
- * variants, and lists the item's stock history.
+ * item_view.php — Product detail
+ * Shows the product's picture and variants, lets you add several variants
+ * at once, edit/delete a variant, and lists the product's stock history.
  */
 
 require_once __DIR__ . '/includes/bootstrap.php';
+require_login();
 
 $id   = (int) ($_GET['id'] ?? 0);
-$item = find_row('items', $id);
+$item = db_row(
+    'SELECT i.*, c.name AS category FROM items i LEFT JOIN categories c ON c.id = i.category_id WHERE i.id = ?',
+    'i',
+    [$id]
+);
 
 if ($item === null) {
-    flash('Item not found.', 'error');
+    flash('Product not found.', 'error');
     redirect('items.php');
 }
 
-// Handle variant and item actions, then redirect so a refresh doesn't resubmit
+$variantRows = [];
+$addErrors   = [];
+
+// ---------- Handle the forms on this page ----------
 if (is_post()) {
+    // Hidden input <input name="action"> tells us which form was submitted
     $action = $_POST['action'] ?? '';
 
-    try {
-        switch ($action) {
-            case 'save_variant':
-                $variantId = (int) ($_POST['variant_id'] ?? 0);
-                $fields = [
-                    'label'         => trim($_POST['label'] ?? ''),
-                    'sku'           => trim($_POST['sku'] ?? ''),
-                    'unit_cost'     => (float) ($_POST['unit_cost'] ?? 0),
-                    'sell_price'    => (float) ($_POST['sell_price'] ?? 0),
-                    'low_threshold' => max(0, (int) ($_POST['low_threshold'] ?? 0)),
-                ];
+    switch ($action) {
+        case 'add_variants':
+            list($variantRows, $addErrors) = variants_from_post();
 
-                if ($fields['label'] === '') {
-                    throw new RuntimeException('Variant label is required.');
-                }
-                if ($fields['unit_cost'] < 0 || $fields['sell_price'] < 0) {
-                    throw new RuntimeException('Cost and price cannot be negative.');
-                }
+            // Labels must be unique within the product (new rows + existing ones)
+            $labels = array_map('strtolower', array_column($variantRows, 'label'));
+            foreach (item_variants($id) as $v) {
+                $labels[] = strtolower($v['label']);
+            }
+            if (count($labels) !== count(array_unique($labels))) {
+                $addErrors[] = 'Each variant needs a different label.';
+            }
+            if (count($variantRows) === 0) {
+                $addErrors[] = 'Fill in at least one variant row.';
+            }
 
-                // Only update if the variant exists and belongs to this item; otherwise add a new one
-                $existing = find_row('variants', $variantId);
-                if ($existing !== null && $existing['item_id'] === $id) {
-                    // Quantity is never edited here, use Stock so the change is logged
-                    update_row('variants', $variantId, $fields);
-                    flash('Variant updated.');
-                } else {
-                    // Insert at 0, then add opening stock via change_stock() so it appears in the history
-                    $newId = insert_row('variants', ['item_id' => $id, 'quantity' => 0] + $fields);
-                    $qty   = max(0, (int) ($_POST['quantity'] ?? 0));
-                    if ($qty > 0) {
-                        change_stock($newId, $qty, 'initial', ['reason' => 'Opening stock count']);
-                    }
-                    flash('Variant added.');
-                }
-                save_data();
-                break;
+            if (!$addErrors) {
+                insert_variants($id, $variantRows);
+                flash(count($variantRows) . ' variant(s) added.');
+                redirect("item_view.php?id=$id");
+            }
+            break;   // fall through to the page so the errors and typed rows are shown
 
-            case 'delete_variant':
-                // Ownership check prevents deleting a variant that belongs to another item
-                $variant = find_row('variants', (int) ($_POST['variant_id'] ?? 0));
-                if ($variant !== null && $variant['item_id'] === $id) {
-                    delete_variant($variant['id']);
-                    save_data();
-                    flash('Variant deleted.');
-                }
-                break;
+        case 'save_variant':
+            $variantId = (int) ($_POST['variant_id'] ?? 0);
+            $label     = trim($_POST['label'] ?? '');
+            $sku       = trim($_POST['sku'] ?? '');
+            $cost      = (float) ($_POST['unit_cost'] ?? 0);
+            $price     = (float) ($_POST['sell_price'] ?? 0);
+            $threshold = max(0, (int) ($_POST['low_threshold'] ?? 0));
 
-            case 'delete_item':
-                delete_item($id);
-                save_data();
-                flash('Item "' . $item['name'] . '" deleted.');
-                redirect('items.php');
-        }
-    } catch (RuntimeException $ex) {
-        // Validation failed before anything was saved, so the data file is unchanged
-        flash($ex->getMessage(), 'error');
+            if ($label === '') {
+                flash('Variant label is required.', 'error');
+            } elseif ($cost < 0 || $price < 0) {
+                flash('Cost and price cannot be negative.', 'error');
+            } else {
+                // "AND item_id = ?" makes sure the variant belongs to this product
+                // Quantity is never edited here — use Stock so the change is logged
+                db_run(
+                    'UPDATE variants SET label = ?, sku = ?, unit_cost = ?, sell_price = ?, low_threshold = ? WHERE id = ? AND item_id = ?',
+                    'ssddiii',
+                    [$label, $sku, $cost, $price, $threshold, $variantId, $id]
+                );
+                flash('Variant updated.');
+            }
+            redirect("item_view.php?id=$id");
+
+        case 'delete_variant':
+            // Its stock history is removed too (ON DELETE CASCADE)
+            db_run('DELETE FROM variants WHERE id = ? AND item_id = ?', 'ii', [(int) ($_POST['variant_id'] ?? 0), $id]);
+            flash('Variant deleted.');
+            redirect("item_view.php?id=$id");
+
+        case 'delete_item':
+            delete_image('products', $item['image']);    // remove the picture file from disk
+            db_run('DELETE FROM items WHERE id = ?', 'i', [$id]);
+            flash('Product "' . $item['name'] . '" deleted.');
+            redirect('items.php');
     }
-
-    redirect("item_view.php?id=$id");
 }
 
 $variants = item_variants($id);
 
-// Variant loaded into the form when editing (?edit_variant=ID)
+// Variant currently being edited (from the link ?edit_variant=ID)
 $editVariant = null;
 $editId = (int) ($_GET['edit_variant'] ?? 0);
 foreach ($variants as $v) {
-    if ($v['id'] === $editId) {
+    if ((int) $v['id'] === $editId) {
         $editVariant = $v;
-        break;
     }
 }
 
+// Totals across variants
 $totalQty   = 0;
 $totalValue = 0.0;
 foreach ($variants as $v) {
@@ -99,36 +108,41 @@ foreach ($variants as $v) {
     $totalValue += $v['quantity'] * $v['unit_cost'];
 }
 
-// Latest 20 stock movements across all of this item's variants
-$movements = array_slice(movement_list(array_column($variants, 'id')), 0, 20);
+$movements = movement_list('v.item_id = ?', 'i', [$id], 20);
 
 $pageTitle = $item['name'];
 include __DIR__ . '/includes/header.php';
 ?>
 
-<div class="page-head">
-    <div>
-        <a class="small muted" href="items.php">← Items</a>
-        <h1><?= e($item['name']) ?> <?= badge($item['status'], tag_class($item['status'])) ?></h1>
-        <p class="muted">
-            <?= e($item['brand'] ?: 'No brand') ?> · <?= e(category_name($item['category_id'])) ?>
-            · <?= $totalQty ?> units · <?= money($totalValue) ?> at cost
-        </p>
-        <?php if ($item['notes'] !== ''): ?><p><?= nl2br(e($item['notes'])) ?></p><?php endif; ?>
+<a class="back-link" href="items.php">← Products</a>
+
+<div class="product-head">
+    <div class="product-photo">
+        <img src="<?= e(image_url('products', $item['image'])) ?>" alt="<?= e($item['name']) ?>">
     </div>
-    <div class="actions">
-        <a class="btn" href="item_form.php?id=<?= $id ?>">Edit item</a>
-        <form method="post" class="inline" onsubmit="return confirm('Delete this item, all its variants and their history?');">
-            <input type="hidden" name="action" value="delete_item">
-            <button class="btn danger">Delete</button>
-        </form>
+    <div class="product-info">
+        <h1><?= e($item['name']) ?> <?= badge($item['status'], tag_class($item['status'])) ?></h1>
+        <p class="muted"><?= e($item['brand'] ?: 'No brand') ?> · <?= e($item['category'] ?? 'Uncategorized') ?></p>
+        <div class="stats compact">
+            <div class="stat"><span class="stat-label">Variants</span><span class="stat-value"><?= count($variants) ?></span></div>
+            <div class="stat"><span class="stat-label">Units</span><span class="stat-value"><?= $totalQty ?></span></div>
+            <div class="stat"><span class="stat-label">Value at cost</span><span class="stat-value"><?= money($totalValue) ?></span></div>
+        </div>
+        <?php if (!empty($item['notes'])): ?><p><?= nl2br(e($item['notes'])) ?></p><?php endif; ?>
+        <div class="actions">
+            <a class="btn" href="item_form.php?id=<?= $id ?>">Edit product</a>
+            <form method="post" class="inline" onsubmit="return confirm('Delete this product, its picture, all its variants and their history?');">
+                <input type="hidden" name="action" value="delete_item">
+                <button class="btn danger">Delete</button>
+            </form>
+        </div>
     </div>
 </div>
 
 <section class="card">
     <h2>Variants</h2>
     <?php if (!$variants): ?>
-        <p class="empty">No variants yet — add one below.</p>
+        <p class="empty">No variants yet — add some below.</p>
     <?php else: ?>
         <div class="table-wrap">
             <table>
@@ -140,21 +154,21 @@ include __DIR__ . '/includes/header.php';
                 </thead>
                 <tbody>
                 <?php foreach ($variants as $v): ?>
-                    <?php [$label, $class] = stock_status($v['quantity'], $v['low_threshold']); ?>
-                    <tr>
+                    <?php list($label, $class) = stock_status($v['quantity'], $v['low_threshold']); ?>
+                    <tr class="<?= $editVariant && $editVariant['id'] == $v['id'] ? 'editing' : '' ?>">
                         <td><strong><?= e($v['label']) ?></strong></td>
                         <td class="muted"><?= e($v['sku']) ?></td>
-                        <td class="num"><?= $v['quantity'] ?></td>
-                        <td class="num muted"><?= $v['low_threshold'] ?></td>
+                        <td class="num"><?= (int) $v['quantity'] ?></td>
+                        <td class="num muted"><?= (int) $v['low_threshold'] ?></td>
                         <td><?= badge($label, $class) ?></td>
                         <td class="num"><?= money($v['unit_cost']) ?></td>
                         <td class="num"><?= money($v['sell_price']) ?></td>
                         <td class="num nowrap">
-                            <a class="btn small" href="stock.php?variant=<?= $v['id'] ?>">Stock</a>
-                            <a class="btn small" href="item_view.php?id=<?= $id ?>&edit_variant=<?= $v['id'] ?>#variant-form">Edit</a>
+                            <a class="btn small" href="stock.php?variant=<?= (int) $v['id'] ?>#stock-forms">Stock</a>
+                            <a class="btn small" href="item_view.php?id=<?= $id ?>&edit_variant=<?= (int) $v['id'] ?>#edit-variant">Edit</a>
                             <form method="post" class="inline" onsubmit="return confirm('Delete this variant and its stock history?');">
                                 <input type="hidden" name="action" value="delete_variant">
-                                <input type="hidden" name="variant_id" value="<?= $v['id'] ?>">
+                                <input type="hidden" name="variant_id" value="<?= (int) $v['id'] ?>">
                                 <button class="btn small danger">×</button>
                             </form>
                         </td>
@@ -166,48 +180,52 @@ include __DIR__ . '/includes/header.php';
     <?php endif; ?>
 </section>
 
-<!-- One form for both add and edit; a hidden variant_id of 0 means "new" -->
-<section class="card" id="variant-form">
-    <h2><?= $editVariant ? 'Edit variant' : 'Add variant' ?></h2>
+<?php if ($editVariant): ?>
+<section class="card" id="edit-variant">
+    <h2>Edit variant — <?= e($editVariant['label']) ?></h2>
     <form method="post" class="form">
         <input type="hidden" name="action" value="save_variant">
-        <input type="hidden" name="variant_id" value="<?= $editVariant['id'] ?? 0 ?>">
+        <input type="hidden" name="variant_id" value="<?= (int) $editVariant['id'] ?>">
         <div class="row">
             <label>Label
-                <input type="text" name="label" required value="<?= e($editVariant['label'] ?? '') ?>" placeholder="e.g. 16GB / White">
+                <input type="text" name="label" required value="<?= e($editVariant['label']) ?>">
             </label>
             <label>SKU
-                <input type="text" name="sku" value="<?= e($editVariant['sku'] ?? '') ?>">
+                <input type="text" name="sku" value="<?= e($editVariant['sku']) ?>">
             </label>
-            <!-- Opening qty is only offered for new variants -->
-            <?php if (!$editVariant): ?>
-                <label>Opening qty
-                    <input type="number" name="quantity" min="0" value="0">
-                </label>
-            <?php endif; ?>
             <label>Unit cost
-                <input type="number" name="unit_cost" min="0" step="0.01" value="<?= e($editVariant['unit_cost'] ?? '') ?>">
+                <input type="number" name="unit_cost" min="0" step="0.01" value="<?= e($editVariant['unit_cost']) ?>">
             </label>
             <label>Sell price
-                <input type="number" name="sell_price" min="0" step="0.01" value="<?= e($editVariant['sell_price'] ?? '') ?>">
+                <input type="number" name="sell_price" min="0" step="0.01" value="<?= e($editVariant['sell_price']) ?>">
             </label>
             <label>Low-stock at
-                <input type="number" name="low_threshold" min="0" value="<?= e($editVariant['low_threshold'] ?? DEFAULT_THRESHOLD) ?>">
+                <input type="number" name="low_threshold" min="0" value="<?= e($editVariant['low_threshold']) ?>">
             </label>
         </div>
         <div class="form-actions">
-            <button class="btn primary"><?= $editVariant ? 'Save variant' : 'Add variant' ?></button>
-            <?php if ($editVariant): ?>
-                <a class="btn" href="item_view.php?id=<?= $id ?>">Cancel</a>
-                <span class="muted small">To change quantity, use <a href="stock.php?variant=<?= $editVariant['id'] ?>">Stock</a>.</span>
-            <?php endif; ?>
+            <button class="btn primary">Save variant</button>
+            <a class="btn" href="item_view.php?id=<?= $id ?>">Cancel</a>
+            <span class="muted small">To change quantity, use <a href="stock.php?variant=<?= (int) $editVariant['id'] ?>#stock-forms">Stock</a>.</span>
         </div>
+    </form>
+</section>
+<?php endif; ?>
+
+<section class="card" id="add-variants">
+    <h2>Add variants</h2>
+    <?php if ($addErrors): ?>
+        <div class="flash flash-error"><?php foreach ($addErrors as $error): ?><div><?= e($error) ?></div><?php endforeach; ?></div>
+    <?php endif; ?>
+    <form method="post" class="form">
+        <input type="hidden" name="action" value="add_variants">
+        <?php include __DIR__ . '/includes/variant_rows.php'; ?>
+        <div class="form-actions"><button class="btn primary">Save variants</button></div>
     </form>
 </section>
 
 <section class="card">
     <h2>Stock history</h2>
-    <!-- Hide the Part column in the shared table, since every row is this item -->
     <?php $showPart = false; ?>
     <?php include __DIR__ . '/includes/movements_table.php'; ?>
 </section>

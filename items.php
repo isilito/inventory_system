@@ -1,96 +1,75 @@
 <?php
 /**
- * items.php - Item list
- * Search and filter items by category, status tag and stock level.
+ * items.php — Product list
+ * Search and filter products by category, status tag and stock level.
+ * Shows each product's picture, its variants and total stock.
  */
 
 require_once __DIR__ . '/includes/bootstrap.php';
+require_login();
 
-$pageTitle = 'Items';
+$pageTitle = 'Products';
 
-// Filters come from the query string
+// Filters come from the query string ($_GET), e.g. items.php?q=ryzen&category=1
 $search     = trim($_GET['q'] ?? '');
 $categoryId = (int) ($_GET['category'] ?? 0);
 $tag        = $_GET['tag'] ?? '';
 $stockLevel = $_GET['stock'] ?? '';
 
-$items = [];
+// Build the WHERE part of the query from the filters that are filled in
+$where  = [];
+$types  = '';
+$params = [];
 
-foreach (rows('items') as $item) {
-    $variants = item_variants($item['id']);
-
-    // Search matches name, brand, or any variant's label / SKU
-    if ($search !== '') {
-        $haystack = $item['name'] . ' ' . $item['brand'];
-        foreach ($variants as $v) {
-            $haystack .= ' ' . $v['label'] . ' ' . $v['sku'];
-        }
-        if (stripos($haystack, $search) === false) {
-            continue;
-        }
-    }
-    if ($categoryId > 0 && $item['category_id'] !== $categoryId) {
-        continue;
-    }
-    if ($tag !== '' && $item['status'] !== $tag) {
-        continue;
-    }
-
-    // "Out" (0 or less) and "low" (at or below threshold) are counted separately
-    $totalQty = 0;
-    $lowCount = 0;
-    $outCount = 0;
-    foreach ($variants as $v) {
-        $totalQty += $v['quantity'];
-        if ($v['quantity'] <= 0) {
-            $outCount++;
-        } elseif ($v['quantity'] <= $v['low_threshold']) {
-            $lowCount++;
-        }
-    }
-
-    // An item matches if at least one of its variants is low / out
-    $keep = match ($stockLevel) {
-        'low'   => $lowCount > 0,
-        'out'   => $outCount > 0,
-        default => true,
-    };
-    if (!$keep) {
-        continue;
-    }
-
-    // Item-level badge reflects the worst case among its variants
-    if (!$variants) {
-        $stock = ['No variants', 'muted'];
-    } elseif ($totalQty <= 0) {
-        $stock = ['Out of stock', 'out'];
-    } elseif ($lowCount > 0 || $outCount > 0) {
-        $stock = ['Low stock', 'low'];
-    } else {
-        $stock = ['In stock', 'ok'];
-    }
-
-    $item['category']  = category_name($item['category_id']);
-    $item['total_qty'] = $totalQty;
-    $item['stock']     = $stock;
-    $items[] = $item;
+if ($search !== '') {
+    // Match the name, brand, or any of the product's variant labels / SKUs
+    $where[] = '(i.name LIKE ? OR i.brand LIKE ? OR EXISTS (
+                    SELECT 1 FROM variants sv WHERE sv.item_id = i.id AND (sv.label LIKE ? OR sv.sku LIKE ?)))';
+    $like = '%' . $search . '%';
+    $types .= 'ssss';
+    array_push($params, $like, $like, $like, $like);
+}
+if ($categoryId > 0) {
+    $where[] = 'i.category_id = ?';
+    $types  .= 'i';
+    $params[] = $categoryId;
+}
+if ($tag !== '') {
+    $where[] = 'i.status = ?';
+    $types  .= 's';
+    $params[] = $tag;
 }
 
-// Sort by category, then name
-usort($items, fn($a, $b) => [$a['category'], $a['name']] <=> [$b['category'], $b['name']]);
+$sql = 'SELECT i.*, c.name AS category,
+               COUNT(v.id) AS variant_count,
+               COALESCE(SUM(v.quantity), 0) AS total_qty,
+               COALESCE(SUM(v.quantity <= 0), 0) AS out_count,
+               COALESCE(SUM(v.quantity > 0 AND v.quantity <= v.low_threshold), 0) AS low_count,
+               GROUP_CONCAT(v.label ORDER BY v.id SEPARATOR " · ") AS variant_labels
+        FROM items i
+        LEFT JOIN categories c ON c.id = i.category_id
+        LEFT JOIN variants v   ON v.item_id = i.id'
+     . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
+     . ' GROUP BY i.id, i.category_id, i.name, i.brand, i.status, i.notes, i.image, i.created_at, c.name';
 
-$categories = rows('categories');
-usort($categories, fn($a, $b) => strcasecmp($a['name'], $b['name']));
+// Stock-level filter works on the totals, so it goes in HAVING
+if ($stockLevel === 'low') {
+    $sql .= ' HAVING low_count > 0';
+} elseif ($stockLevel === 'out') {
+    $sql .= ' HAVING out_count > 0';
+}
+$sql .= ' ORDER BY c.name IS NULL, c.name, i.name';
 
-// Controls the empty-state message and the "Clear" button
+$items      = db_rows($sql, $types, $params);
+$categories = all_categories();
 $isFiltered = $search !== '' || $categoryId > 0 || $tag !== '' || $stockLevel !== '';
 
 include __DIR__ . '/includes/header.php';
 ?>
 
 <div class="page-head">
-    <h1>Items</h1>
-    <a class="btn primary" href="item_form.php">+ New item</a>
+    <h1>Products</h1>
+    <a class="btn primary" href="item_form.php">+ New product</a>
 </div>
 
 <form method="get" class="filters">
@@ -98,7 +77,7 @@ include __DIR__ . '/includes/header.php';
     <select name="category">
         <option value="">All categories</option>
         <?php foreach ($categories as $c): ?>
-            <option value="<?= $c['id'] ?>" <?= $categoryId === $c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
+            <option value="<?= $c['id'] ?>" <?= $categoryId === (int) $c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
         <?php endforeach; ?>
     </select>
     <select name="tag">
@@ -118,30 +97,51 @@ include __DIR__ . '/includes/header.php';
 
 <section class="card">
     <?php if (!$items): ?>
-        <p class="empty"><?= $isFiltered ? 'No items match these filters.' : 'No items yet. Add your first part.' ?></p>
+        <p class="empty"><?= $isFiltered ? 'No products match these filters.' : 'No products yet. Add your first part.' ?></p>
     <?php else: ?>
         <div class="table-wrap">
             <table>
                 <thead>
-                <tr><th>Item</th><th>Category</th><th>Tag</th><th>Stock</th><th class="num">Qty</th></tr>
+                <tr><th>Product</th><th>Category</th><th>Variants</th><th>Tag</th><th>Stock</th><th class="num">Qty</th></tr>
                 </thead>
                 <tbody>
                 <?php foreach ($items as $item): ?>
+                    <?php
+                    // Product-level stock badge: worst status among its variants
+                    if ($item['variant_count'] == 0) {
+                        $stock = ['No variants', 'muted'];
+                    } elseif ($item['total_qty'] <= 0) {
+                        $stock = ['Out of stock', 'out'];
+                    } elseif ($item['low_count'] > 0 || $item['out_count'] > 0) {
+                        $stock = ['Low stock', 'low'];
+                    } else {
+                        $stock = ['In stock', 'ok'];
+                    }
+                    ?>
                     <tr>
                         <td>
-                            <a href="item_view.php?id=<?= $item['id'] ?>"><?= e($item['name']) ?></a>
-                            <span class="muted"><?= e($item['brand']) ?></span>
+                            <div class="part-cell">
+                                <img class="thumb" src="<?= e(image_url('products', $item['image'])) ?>" alt="">
+                                <div>
+                                    <a href="item_view.php?id=<?= (int) $item['id'] ?>"><strong><?= e($item['name']) ?></strong></a>
+                                    <div class="muted small"><?= e($item['brand']) ?></div>
+                                </div>
+                            </div>
                         </td>
-                        <td class="muted"><?= e($item['category']) ?></td>
+                        <td class="muted"><?= e($item['category'] ?? 'Uncategorized') ?></td>
+                        <td class="small">
+                            <?= (int) $item['variant_count'] ?>
+                            <span class="muted">— <?= e($item['variant_labels'] ?? 'none') ?></span>
+                        </td>
                         <td><?= badge($item['status'], tag_class($item['status'])) ?></td>
-                        <td><?= badge($item['stock'][0], $item['stock'][1]) ?></td>
-                        <td class="num"><?= $item['total_qty'] ?></td>
+                        <td><?= badge($stock[0], $stock[1]) ?></td>
+                        <td class="num"><?= (int) $item['total_qty'] ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
             </table>
         </div>
-        <p class="muted small"><?= count($items) ?> item(s)</p>
+        <p class="muted small"><?= count($items) ?> product(s)</p>
     <?php endif; ?>
 </section>
 

@@ -2,7 +2,7 @@
 /**
  * movements_table.php
  * Reusable table of stock movements.
- * Expects: $movements (array of rows). Optional: $showPart (bool, default true).
+ * Expects: $movements (rows from movement_list()). Optional: $showPart (bool, default true).
  */
 
 $showPart = $showPart ?? true;
@@ -20,6 +20,7 @@ $showPart = $showPart ?? true;
                 <th class="num">Change</th>
                 <th class="num">After</th>
                 <th>Note</th>
+                <th>By</th>
             </tr>
             </thead>
             <tbody>
@@ -27,12 +28,12 @@ $showPart = $showPart ?? true;
                 <tr>
                     <td class="nowrap"><?= e(nice_date($m['created_at'])) ?></td>
                     <?php if ($showPart): ?>
-                        <td>
+                        <td class="cell-main">
                             <a href="item_view.php?id=<?= (int) $m['item_id'] ?>"><?= e($m['item_name']) ?></a>
                             <span class="muted">· <?= e($m['label']) ?></span>
                         </td>
                     <?php else: ?>
-                        <td><?= e($m['label']) ?></td>
+                        <td class="cell-main"><strong><?= e($m['label']) ?></strong></td>
                     <?php endif; ?>
                     <td><?= e(movement_label($m['type'])) ?></td>
                     <td class="num <?= $m['qty_change'] > 0 ? 'pos' : 'neg' ?>">
@@ -40,6 +41,7 @@ $showPart = $showPart ?? true;
                     </td>
                     <td class="num"><?= (int) $m['qty_after'] ?></td>
                     <td class="muted"><?= e(trim($m['supplier'] . ' ' . $m['reason'])) ?></td>
+                    <td class="muted small"><?= e($m['username'] ?? 'system') ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>

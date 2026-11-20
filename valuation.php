@@ -1,55 +1,49 @@
 <?php
 /**
- * valuation.php - Inventory valuation
+ * valuation.php — Inventory valuation
  * Stock value at cost and at retail, broken down by category,
  * plus the most valuable parts on the shelf.
  */
 
 require_once __DIR__ . '/includes/bootstrap.php';
+require_login();
 
 $pageTitle = 'Valuation';
 
-$variants = variant_list();
+// Value per category — MySQL does the adding up with SUM() and GROUP BY
+$rows = db_rows(
+    "SELECT COALESCE(c.name, 'Uncategorized') AS category,
+            COUNT(v.id) AS variants,
+            SUM(v.quantity) AS units,
+            SUM(v.quantity * v.unit_cost)  AS cost_value,
+            SUM(v.quantity * v.sell_price) AS retail_value
+     FROM variants v
+     JOIN items i ON i.id = v.item_id
+     LEFT JOIN categories c ON c.id = i.category_id
+     GROUP BY COALESCE(c.name, 'Uncategorized')
+     ORDER BY cost_value DESC"
+);
 
-// Single pass: per-category rows and grand totals. "Cost" is what we paid, "retail" is the selling price
-$rows  = [];
+// Grand totals
 $grand = ['units' => 0, 'cost' => 0.0, 'retail' => 0.0];
-
-foreach ($variants as $v) {
-    $category = category_name($v['category_id']);
-
-    $rows[$category] ??= ['category' => $category, 'variants' => 0, 'units' => 0, 'cost_value' => 0.0, 'retail_value' => 0.0];
-    $rows[$category]['variants']++;
-    $rows[$category]['units']        += $v['quantity'];
-    $rows[$category]['cost_value']   += $v['quantity'] * $v['unit_cost'];
-    $rows[$category]['retail_value'] += $v['quantity'] * $v['sell_price'];
-
-    $grand['units']  += $v['quantity'];
-    $grand['cost']   += $v['quantity'] * $v['unit_cost'];
-    $grand['retail'] += $v['quantity'] * $v['sell_price'];
+foreach ($rows as $r) {
+    $grand['units']  += $r['units'];
+    $grand['cost']   += $r['cost_value'];
+    $grand['retail'] += $r['retail_value'];
 }
-// Profit if everything sells at the listed price
 $grandProfit = $grand['retail'] - $grand['cost'];
 
-// Categories with the most money tied up come first
-usort($rows, fn($a, $b) => $b['cost_value'] <=> $a['cost_value']);
+// The 10 most valuable in-stock variants
+$topParts = db_rows(
+    'SELECT v.*, i.name AS item_name, i.image, v.quantity * v.unit_cost AS value
+     FROM variants v
+     JOIN items i ON i.id = v.item_id
+     WHERE v.quantity > 0
+     ORDER BY value DESC
+     LIMIT 10'
+);
 
-// Rank in-stock variants by cost value (out-of-stock ones are worth 0, so skip them)
-$ranked = [];
-foreach ($variants as $v) {
-    if ($v['quantity'] > 0) {
-        $v['value'] = $v['quantity'] * $v['unit_cost'];
-        $ranked[]   = $v;
-    }
-}
-usort($ranked, fn($a, $b) => $b['value'] <=> $a['value']);
-
-// Keep only the top 10
-$topParts = [];
-while (count($topParts) < 10 && $ranked) {
-    $topParts[] = array_shift($ranked);
-}
-
+include __DIR__ . '/includes/header.php';
 ?>
 
 <div class="page-head">
@@ -64,7 +58,6 @@ while (count($topParts) < 10 && $ranked) {
     <div class="stat">
         <span class="stat-label">Potential profit</span>
         <span class="stat-value"><?= money($grandProfit) ?></span>
-        <!-- Margin is profit as a percentage of retail; guarded against dividing by zero -->
         <span class="stat-sub"><?= $grand['retail'] > 0 ? number_format($grandProfit / $grand['retail'] * 100, 1) : '0.0' ?>% margin</span>
     </div>
 </section>
@@ -81,7 +74,6 @@ while (count($topParts) < 10 && $ranked) {
                 </thead>
                 <tbody>
                 <?php foreach ($rows as $r): ?>
-                    <?php // Share of total cost value, drives the bar width ?>
                     <?php $share = $grand['cost'] > 0 ? $r['cost_value'] / $grand['cost'] * 100 : 0; ?>
                     <tr>
                         <td><?= e($r['category']) ?></td>
@@ -122,8 +114,13 @@ while (count($topParts) < 10 && $ranked) {
                 <?php foreach ($topParts as $p): ?>
                     <tr>
                         <td>
-                            <a href="item_view.php?id=<?= (int) $p['item_id'] ?>"><?= e($p['item_name']) ?></a>
-                            <span class="muted">· <?= e($p['label']) ?></span>
+                            <div class="part-cell">
+                                <img class="thumb" src="<?= e(image_url('products', $p['image'])) ?>" alt="">
+                                <span>
+                                    <a href="item_view.php?id=<?= (int) $p['item_id'] ?>"><?= e($p['item_name']) ?></a>
+                                    <span class="muted">· <?= e($p['label']) ?></span>
+                                </span>
+                            </div>
                         </td>
                         <td class="num"><?= (int) $p['quantity'] ?></td>
                         <td class="num"><?= money($p['unit_cost']) ?></td>

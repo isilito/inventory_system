@@ -1,13 +1,13 @@
 <?php
 /**
  * functions.php
- * Small helpers shared by every page: output escaping, money formatting,
- * flash messages, status badges and the stock-change logic.
+ * Helpers shared by every page: output escaping, money formatting,
+ * login checks, flash messages, picture uploads and the stock logic.
  */
 
 /* ---------- Output & request helpers ---------- */
 
-// Escape text before printing it into HTML
+// Escape text before printing it into HTML (stops <script> injection)
 function e($value): string
 {
     return htmlspecialchars((string) ($value ?? ''), ENT_QUOTES, 'UTF-8');
@@ -20,17 +20,19 @@ function money($amount): string
 }
 
 // Short readable date, e.g. "Oct 10, 2026"
-function nice_date(?string $timestamp): string
+function nice_date($timestamp): string
 {
     return $timestamp ? date('M j, Y', strtotime($timestamp)) : '';
 }
 
+// Was this page requested by submitting a form with method="post"?
 function is_post(): bool
 {
     return $_SERVER['REQUEST_METHOD'] === 'POST';
 }
 
-function redirect(string $url): never
+// Send the browser to another page and stop this script
+function redirect(string $url): void
 {
     header('Location: ' . $url);
     exit;
@@ -42,12 +44,132 @@ function flash(string $message, string $type = 'ok'): void
     $_SESSION['flash'] = ['message' => $message, 'type' => $type];
 }
 
+// Read the flash message (if any) and remove it so it only shows once
 function take_flash(): ?array
 {
     $flash = $_SESSION['flash'] ?? null;
     unset($_SESSION['flash']);
     return $flash;
 }
+
+
+/* ---------- Login / accounts ---------- */
+
+// Is somebody logged in right now?
+function is_logged_in(): bool
+{
+    return isset($_SESSION['user_id']);
+}
+
+// Put this at the top of every private page
+function require_login(): void
+{
+    if (!is_logged_in()) {
+        flash('Please log in first.', 'error');
+        redirect('login.php');
+    }
+}
+
+// The logged-in user's row from the database (or null)
+function current_user(): ?array
+{
+    if (!is_logged_in()) {
+        return null;
+    }
+    return db_row('SELECT id, full_name, username, email, avatar, created_at FROM users WHERE id = ?', 'i', [$_SESSION['user_id']]);
+}
+
+// Remember the user in the session after a successful login / signup
+function log_in_user(array $user): void
+{
+    session_regenerate_id(true);           // new session id = protection against session fixation
+    $_SESSION['user_id']   = (int) $user['id'];
+    $_SESSION['user_name'] = $user['full_name'];
+}
+
+
+/* ---------- Picture uploads (file transfer) ---------- */
+
+/**
+ * Saves a picture sent through <input type="file" name="$field">.
+ *
+ * Returns an array with two values:
+ *   [0] the new file name ('' if no file was chosen)
+ *   [1] an error message   ('' if everything went fine)
+ *
+ * $folder is a sub-folder of uploads/, e.g. 'products' or 'avatars'.
+ */
+function upload_image(string $field, string $folder): array
+{
+    // Nothing chosen in the file input -> not an error, just no picture
+    if (!isset($_FILES[$field]) || $_FILES[$field]['error'] === UPLOAD_ERR_NO_FILE) {
+        return ['', ''];
+    }
+
+    $file = $_FILES[$field];
+
+    // PHP reports its own upload problems through the 'error' code
+    if ($file['error'] === UPLOAD_ERR_INI_SIZE || $file['error'] === UPLOAD_ERR_FORM_SIZE) {
+        return ['', 'The picture is too large.'];
+    }
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        return ['', 'The picture could not be uploaded (error code ' . $file['error'] . ').'];
+    }
+
+    // Our own checks: size, extension, and that it really is an image
+    if ($file['size'] > MAX_UPLOAD_SIZE) {
+        return ['', 'The picture must be 2 MB or smaller.'];
+    }
+
+    $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    if (!in_array($extension, ALLOWED_IMAGE_TYPES)) {
+        return ['', 'Only JPG, PNG, GIF or WEBP pictures are allowed.'];
+    }
+
+    if (getimagesize($file['tmp_name']) === false) {
+        return ['', 'That file is not a valid picture.'];
+    }
+
+    // Create the destination folder the first time
+    $targetDir = UPLOAD_DIR . $folder . '/';
+    if (!is_dir($targetDir)) {
+        mkdir($targetDir, 0777, true);
+    }
+
+    // Give the file a new unique name so uploads never overwrite each other
+    // and a user can't choose a dangerous file name
+    $newName = $folder . '_' . uniqid() . '.' . $extension;
+
+    // Move the file from PHP's temporary folder into uploads/<folder>/
+    if (!move_uploaded_file($file['tmp_name'], $targetDir . $newName)) {
+        return ['', 'Could not save the picture on the server.'];
+    }
+
+    return [$newName, ''];
+}
+
+// Deletes an uploaded picture from disk (used when replacing or deleting)
+function delete_image(string $folder, ?string $fileName): void
+{
+    if ($fileName === null || $fileName === '') {
+        return;
+    }
+
+    $path = UPLOAD_DIR . $folder . '/' . basename($fileName);
+    if (file_exists($path)) {
+        unlink($path);
+    }
+}
+
+// URL for a picture, or a placeholder image when there is none
+function image_url(string $folder, ?string $fileName): string
+{
+    if ($fileName !== null && $fileName !== '' && file_exists(UPLOAD_DIR . $folder . '/' . $fileName)) {
+        return UPLOAD_URL . $folder . '/' . rawurlencode($fileName);
+    }
+    return $folder === 'avatars' ? 'assets/img/no-avatar.svg' : 'assets/img/no-image.svg';
+}
+
 
 /* ---------- Status tags & badges ---------- */
 
@@ -71,8 +193,6 @@ function tag_class(string $tag): string
             return 'ok';
         case 'Refurbished':
             return 'info';
-        case 'Used':
-            return 'muted';
         case 'Defective':
             return 'out';
         case 'Discontinued':
@@ -85,12 +205,16 @@ function tag_class(string $tag): string
 // Human label for a stock movement type
 function movement_label(string $type): string
 {
-    return match ($type) {
-        'initial' => 'Opening',
-        'restock' => 'Restock',
-        'adjust'  => 'Adjustment',
-        default   => ucfirst($type),
-    };
+    switch ($type) {
+        case 'initial':
+            return 'Opening';
+        case 'restock':
+            return 'Restock';
+        case 'adjust':
+            return 'Adjustment';
+        default:
+            return ucfirst($type);
+    }
 }
 
 function badge(string $label, string $class): string
@@ -98,124 +222,142 @@ function badge(string $label, string $class): string
     return '<span class="badge ' . e($class) . '">' . e($label) . '</span>';
 }
 
+
 /* ---------- Lookups ---------- */
 
-function category_name(?int $categoryId): string
+function all_categories(): array
 {
-    $category = $categoryId ? find_row('categories', $categoryId) : null;
-    return $category['name'] ?? 'Uncategorized';
+    return db_rows('SELECT * FROM categories ORDER BY name');
 }
 
 // Variants of one item, in the order they were added
 function item_variants(int $itemId): array
 {
-    return array_values(array_filter(rows('variants'), fn($v) => $v['item_id'] === $itemId));
+    return db_rows('SELECT * FROM variants WHERE item_id = ? ORDER BY id', 'i', [$itemId]);
+}
+
+// Stock movements with item / variant names and the user who made them
+function movement_list(string $where = '1', string $types = '', array $params = [], int $limit = 20): array
+{
+    $sql = "SELECT m.*, v.label, v.item_id, i.name AS item_name, u.username
+            FROM stock_movements m
+            JOIN variants v ON v.id = m.variant_id
+            JOIN items i    ON i.id = v.item_id
+            LEFT JOIN users u ON u.id = m.user_id
+            WHERE $where
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT $limit";
+
+    return db_rows($sql, $types, $params);
+}
+
+
+/* ---------- Variants: read many rows from $_POST, insert them at once ---------- */
+
+/**
+ * The item form sends variant fields as arrays, one entry per row:
+ *   $_POST['variant_label'] = ['8GB', '16GB']
+ *   $_POST['variant_qty']   = ['10',  '5'  ]   ...and so on.
+ *
+ * This turns them into a list of rows and collects validation errors.
+ * Completely empty rows are ignored. Returns [rows, errors].
+ */
+function variants_from_post(): array
+{
+    $labels = $_POST['variant_label'] ?? [];
+    $rows   = [];
+    $errors = [];
+
+    for ($i = 0; $i < count($labels); $i++) {
+        $row = [
+            'label' => trim($labels[$i]),
+            'sku'   => trim($_POST['variant_sku'][$i] ?? ''),
+            'qty'   => trim($_POST['variant_qty'][$i] ?? ''),
+            'cost'  => trim($_POST['variant_cost'][$i] ?? ''),
+            'price' => trim($_POST['variant_price'][$i] ?? ''),
+            'min'   => trim($_POST['variant_min'][$i] ?? ''),
+        ];
+
+        // Skip rows the user left blank
+        if ($row['label'] === '' && $row['sku'] === '' && $row['cost'] === '' && $row['price'] === '' && ($row['qty'] === '' || $row['qty'] === '0')) {
+            continue;
+        }
+
+        $rowNumber = $i + 1;
+        if ($row['label'] === '') {
+            $errors[] = "Variant row $rowNumber needs a label.";
+        }
+        if ((int) $row['qty'] < 0 || (float) $row['cost'] < 0 || (float) $row['price'] < 0 || (int) $row['min'] < 0) {
+            $errors[] = "Variant row $rowNumber: quantity, cost, price and threshold cannot be negative.";
+        }
+
+        $rows[] = $row;
+    }
+
+    return [$rows, $errors];
 }
 
 /**
- * Every variant with its item's name and category attached,
- * sorted by item name then variant label.
+ * Inserts ALL variants of an item with ONE multi-row INSERT statement:
+ *   INSERT INTO variants (...) VALUES (?,?,?,...), (?,?,?,...), ...
+ * then records each variant's opening quantity in the stock history.
  */
-function variant_list(): array
+function insert_variants(int $itemId, array $rows): void
 {
-    $items = rows('items');
-    $list  = [];
-
-    foreach (rows('variants') as $v) {
-        $item = $items[$v['item_id']] ?? null;
-        if ($item === null) {
-            continue;
-        }
-        $v['item_name']   = $item['name'];
-        $v['category_id'] = $item['category_id'];
-        $list[] = $v;
+    if (count($rows) === 0) {
+        return;
     }
 
-    usort($list, fn($a, $b) => [$a['item_name'], $a['label']] <=> [$b['item_name'], $b['label']]);
-    return $list;
-}
+    $placeholders = [];
+    $types        = '';
+    $params       = [];
 
-/**
- * Stock movements, newest first, with item/variant names attached.
- * Optionally limited to some variant ids and/or one movement type.
- */
-function movement_list(?array $variantIds = null, ?string $type = null): array
-{
-    $variants = rows('variants');
-    $items    = rows('items');
-    $list     = [];
-
-    foreach (rows('movements') as $m) {
-        if ($variantIds !== null && !in_array($m['variant_id'], $variantIds, true)) {
-            continue;
-        }
-        if ($type !== null && $m['type'] !== $type) {
-            continue;
-        }
-        $variant = $variants[$m['variant_id']] ?? null;
-        if ($variant === null) {
-            continue;
-        }
-        $m['label']     = $variant['label'];
-        $m['item_id']   = $variant['item_id'];
-        $m['item_name'] = $items[$variant['item_id']]['name'] ?? '';
-        $list[] = $m;
+    foreach ($rows as $row) {
+        $placeholders[] = '(?, ?, ?, 0, ?, ?, ?)';
+        $types         .= 'issddi';
+        $params[] = $itemId;
+        $params[] = $row['label'];
+        $params[] = $row['sku'];
+        $params[] = (float) $row['cost'];
+        $params[] = (float) $row['price'];
+        $params[] = $row['min'] === '' ? DEFAULT_THRESHOLD : (int) $row['min'];
     }
 
-    usort($list, fn($a, $b) => [$b['created_at'], $b['id']] <=> [$a['created_at'], $a['id']]);
-    return $list;
-}
+    $sql = 'INSERT INTO variants (item_id, label, sku, quantity, unit_cost, sell_price, low_threshold) VALUES '
+         . implode(', ', $placeholders);
+    db_run($sql, $types, $params);
 
-/* ---------- Deleting (with clean-up of related rows) ---------- */
+    // For a multi-row INSERT, insert_id is the id of the FIRST new row.
+    // Read back the new rows (same order) to log their opening stock.
+    $firstId = db_insert_id();
+    $newRows = db_rows('SELECT id FROM variants WHERE item_id = ? AND id >= ? ORDER BY id', 'ii', [$itemId, $firstId]);
 
-function delete_variant(int $variantId): void
-{
-    foreach (rows('movements') as $m) {
-        if ($m['variant_id'] === $variantId) {
-            delete_row('movements', $m['id']);
+    foreach ($newRows as $index => $variant) {
+        $qty = (int) $rows[$index]['qty'];
+        if ($qty > 0) {
+            change_stock($variant['id'], $qty, 'initial', 0, '', 'Opening stock count');
         }
     }
-    delete_row('variants', $variantId);
 }
 
-function delete_item(int $itemId): void
-{
-    foreach (item_variants($itemId) as $v) {
-        delete_variant($v['id']);
-    }
-    delete_row('items', $itemId);
-}
-
-// Items in a deleted category become uncategorized
-function delete_category(int $categoryId): void
-{
-    foreach (rows('items') as $item) {
-        if ($item['category_id'] === $categoryId) {
-            update_row('items', $item['id'], ['category_id' => null]);
-        }
-    }
-    delete_row('categories', $categoryId);
-}
 
 /* ---------- Stock logic ---------- */
 
 /**
  * Changes a variant's stock by $delta and logs the movement.
  * Restocks also update the variant's cost using a weighted average.
- * Changes are in memory — call save_data() afterwards to keep them.
  *
- * $extra keys: unit_cost, supplier, reason, created_at
- * Returns the new quantity. Throws RuntimeException on invalid changes.
+ * Returns '' on success, or an error message.
  */
-function change_stock(int $variantId, int $delta, string $type, array $extra = []): int
+function change_stock(int $variantId, int $delta, string $type, float $unitCost = 0, string $supplier = '', string $reason = '', ?string $date = null): string
 {
-    $variant = find_row('variants', $variantId);
+    $variant = db_row('SELECT * FROM variants WHERE id = ?', 'i', [$variantId]);
 
     if ($variant === null) {
-        throw new RuntimeException('Part variant not found.');
+        return 'Part variant not found.';
     }
     if ($delta === 0) {
-        throw new RuntimeException('Quantity must be greater than zero.');
+        return 'Quantity must be greater than zero.';
     }
 
     $oldQty  = (int) $variant['quantity'];
@@ -223,29 +365,24 @@ function change_stock(int $variantId, int $delta, string $type, array $extra = [
     $avgCost = (float) $variant['unit_cost'];
 
     if ($newQty < 0) {
-        throw new RuntimeException("Not enough stock — only {$oldQty} on hand.");
+        return "Not enough stock — only $oldQty on hand.";
     }
 
     // Weighted average cost: (old units × old cost + new units × new cost) ÷ total units
-    if ($type === 'restock' && isset($extra['unit_cost']) && $newQty > 0) {
-        $avgCost = (($oldQty * $avgCost) + ($delta * (float) $extra['unit_cost'])) / $newQty;
+    if ($type === 'restock' && $newQty > 0) {
+        $avgCost = (($oldQty * $avgCost) + ($delta * $unitCost)) / $newQty;
+    } else {
+        $unitCost = $avgCost;   // non-restock movements are logged at the current cost
     }
 
-    update_row('variants', $variantId, [
-        'quantity'  => $newQty,
-        'unit_cost' => round($avgCost, 2),
-    ]);
+    db_run('UPDATE variants SET quantity = ?, unit_cost = ? WHERE id = ?', 'idi', [$newQty, round($avgCost, 2), $variantId]);
 
-    insert_row('movements', [
-        'variant_id' => $variantId,
-        'type'       => $type,
-        'qty_change' => $delta,
-        'qty_after'  => $newQty,
-        'unit_cost'  => (float) ($extra['unit_cost'] ?? $variant['unit_cost']),
-        'supplier'   => $extra['supplier'] ?? '',
-        'reason'     => $extra['reason'] ?? '',
-        'created_at' => $extra['created_at'] ?? date('Y-m-d H:i:s'),
-    ]);
+    db_run(
+        'INSERT INTO stock_movements (variant_id, user_id, type, qty_change, qty_after, unit_cost, supplier, reason, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'iisiidsss',
+        [$variantId, $_SESSION['user_id'] ?? null, $type, $delta, $newQty, $unitCost, $supplier, $reason, $date ?? date('Y-m-d H:i:s')]
+    );
 
-    return $newQty;
+    return '';
 }

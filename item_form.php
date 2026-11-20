@@ -1,104 +1,116 @@
 <?php
 /**
- * item_form.php - Item registration
- * New items are created together with their first variant.
+ * item_form.php — Product registration (create & edit)
+ *
+ * Creating: the product, its picture AND all of its variants are saved
+ * from ONE form submission — the variants with a single multi-row INSERT.
+ * Editing: change the details or replace the picture. Variants are
+ * managed on the product page (item_view.php).
  */
 
 require_once __DIR__ . '/includes/bootstrap.php';
+require_login();
 
 $id     = (int) ($_GET['id'] ?? 0);
 $isEdit = $id > 0;
 $errors = [];
 
-$item = $isEdit ? find_row('items', $id) : null;
+// Load the product when editing
+$item = $isEdit ? db_row('SELECT * FROM items WHERE id = ?', 'i', [$id]) : null;
 if ($isEdit && $item === null) {
-    flash('Item not found.', 'error');
+    flash('Product not found.', 'error');
     redirect('items.php');
 }
 
-// Form values: posted data > existing item > defaults.
-// The variant fields only apply when creating a new item.
+// Form values: posted data > existing product > defaults
 $form = [
-    'name'          => $item['name'] ?? '',
-    'brand'         => $item['brand'] ?? '',
-    'category_id'   => $item['category_id'] ?? '',
-    'status'        => $item['status'] ?? 'New',
-    'notes'         => $item['notes'] ?? '',
-    // first-variant fields (create only)
-    'label'         => 'Standard',
-    'sku'           => '',
-    'quantity'      => 0,
-    'unit_cost'     => '',
-    'sell_price'    => '',
-    'low_threshold' => DEFAULT_THRESHOLD,
+    'name'        => $item['name'] ?? '',
+    'brand'       => $item['brand'] ?? '',
+    'category_id' => $item['category_id'] ?? '',
+    'status'      => $item['status'] ?? 'New',
+    'notes'       => $item['notes'] ?? '',
 ];
+$variantRows = [];
 
 if (is_post()) {
-    // Overwrite defaults with whatever was submitted
+    // Read the product fields from $_POST
     foreach ($form as $key => $default) {
-        $form[$key] = trim($_POST[$key] ?? (string) $default);
+        $form[$key] = trim($_POST[$key] ?? '');
     }
 
+    // ---------- Validation ----------
     if ($form['name'] === '') {
-        $errors[] = 'Item name is required.';
+        $errors[] = 'Product name is required.';
     }
-    if (!in_array($form['status'], STATUS_TAGS, true)) {
+    if (!in_array($form['status'], STATUS_TAGS)) {
         $errors[] = 'Choose a valid status tag.';
     }
+
     if (!$isEdit) {
-        if ($form['label'] === '') {
-            $errors[] = 'Variant label is required.';
+        // Read every variant row that was sent as arrays
+        list($variantRows, $variantErrors) = variants_from_post();
+        $errors = array_merge($errors, $variantErrors);
+
+        if (count($variantRows) === 0) {
+            $errors[] = 'Add at least one variant.';
         }
-        if ((int) $form['quantity'] < 0 || (float) $form['unit_cost'] < 0 || (float) $form['sell_price'] < 0) {
-            $errors[] = 'Quantity, cost and price cannot be negative.';
+
+        // No two variants of the same product with the same label
+        $labels = array_map('strtolower', array_column($variantRows, 'label'));
+        if (count($labels) !== count(array_unique($labels))) {
+            $errors[] = 'Each variant needs a different label.';
         }
     }
 
+    // ---------- Picture ($_FILES) ----------
+    $image = $item['image'] ?? null;
     if (!$errors) {
-        $fields = [
-            // Empty selection means "uncategorized"
-            'category_id' => $form['category_id'] !== '' ? (int) $form['category_id'] : null,
-            'name'        => $form['name'],
-            'brand'       => $form['brand'],
-            'status'      => $form['status'],
-            'notes'       => $form['notes'],
-        ];
+        list($newImage, $uploadError) = upload_image('image', 'products');
+
+        if ($uploadError !== '') {
+            $errors[] = $uploadError;
+        } elseif ($newImage !== '') {
+            delete_image('products', $image);   // replacing: remove the old picture file
+            $image = $newImage;
+        } elseif (isset($_POST['remove_image'])) {
+            delete_image('products', $image);
+            $image = null;
+        }
+    }
+
+    // ---------- Save ----------
+    if (!$errors) {
+        $categoryId = $form['category_id'] !== '' ? (int) $form['category_id'] : null;
 
         if ($isEdit) {
-            update_row('items', $id, $fields);
-            save_data();
-            flash('Item updated.');
+            db_run(
+                'UPDATE items SET category_id = ?, name = ?, brand = ?, status = ?, notes = ?, image = ? WHERE id = ?',
+                'isssssi',
+                [$categoryId, $form['name'], $form['brand'], $form['status'], $form['notes'], $image, $id]
+            );
+            flash('Product updated.');
             redirect("item_view.php?id=$id");
         }
 
-        $newId = insert_row('items', $fields + ['created_at' => date('Y-m-d H:i:s')]);
+        // 1) the product
+        db_run(
+            'INSERT INTO items (category_id, name, brand, status, notes, image) VALUES (?, ?, ?, ?, ?, ?)',
+            'isssss',
+            [$categoryId, $form['name'], $form['brand'], $form['status'], $form['notes'], $image]
+        );
+        $newId = db_insert_id();
 
-        // Quantity starts at 0 here; the opening stock is added below via change_stock()
-        $variantId = insert_row('variants', [
-            'item_id'       => $newId,
-            'label'         => $form['label'],
-            'sku'           => $form['sku'],
-            'quantity'      => 0,
-            'unit_cost'     => (float) $form['unit_cost'],
-            'sell_price'    => (float) $form['sell_price'],
-            'low_threshold' => max(0, (int) $form['low_threshold']),
-        ]);
+        // 2) all its variants in one INSERT (+ opening stock in the history)
+        insert_variants($newId, $variantRows);
 
-        // Going through change_stock() logs the opening quantity in the stock history
-        if ((int) $form['quantity'] > 0) {
-            change_stock($variantId, (int) $form['quantity'], 'initial', ['reason' => 'Opening stock count']);
-        }
-
-        save_data();
-        flash('Item registered.');
+        flash('Product registered with ' . count($variantRows) . ' variant(s).');
         redirect("item_view.php?id=$newId");
     }
 }
 
-$categories = rows('categories');
-usort($categories, fn($a, $b) => strcasecmp($a['name'], $b['name']));
+$categories = all_categories();
 
-$pageTitle = $isEdit ? 'Edit item' : 'New item';
+$pageTitle = $isEdit ? 'Edit product' : 'New product';
 include __DIR__ . '/includes/header.php';
 ?>
 
@@ -113,65 +125,60 @@ include __DIR__ . '/includes/header.php';
     </div>
 <?php endif; ?>
 
-<form method="post" class="card form narrow">
-    <h2>Item details</h2>
-    <label>Name
-        <input type="text" name="name" required value="<?= e($form['name']) ?>" placeholder="e.g. GeForce RTX 4060">
-    </label>
-    <div class="row">
-        <label>Brand
-            <input type="text" name="brand" value="<?= e($form['brand']) ?>" placeholder="e.g. MSI">
-        </label>
-        <label>Category
-            <select name="category_id">
-                <option value="">— None —</option>
-                <?php foreach ($categories as $c): ?>
-                    <option value="<?= $c['id'] ?>" <?= (string) $form['category_id'] === (string) $c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
-                <?php endforeach; ?>
-            </select>
-        </label>
-        <label>Status tag
-            <select name="status">
-                <?php foreach (STATUS_TAGS as $t): ?>
-                    <option <?= $form['status'] === $t ? 'selected' : '' ?>><?= e($t) ?></option>
-                <?php endforeach; ?>
-            </select>
-        </label>
-    </div>
-    <label>Notes
-        <textarea name="notes" rows="2" placeholder="Optional"><?= e($form['notes']) ?></textarea>
-    </label>
+<!-- enctype="multipart/form-data" lets the browser send the picture file -->
+<form method="post" enctype="multipart/form-data" class="card form">
+    <h2>Product details</h2>
+    <div class="form-split">
+        <div class="image-pick">
+            <img id="image-preview" src="<?= e(image_url('products', $item['image'] ?? null)) ?>" alt="">
+            <label>Product picture
+                <input type="file" name="image" accept="image/*" data-preview="image-preview">
+            </label>
+            <span class="muted small">JPG, PNG, GIF or WEBP · max 2 MB</span>
+            <?php if (!empty($item['image'])): ?>
+                <label class="check"><input type="checkbox" name="remove_image" value="1"> Remove picture</label>
+            <?php endif; ?>
+        </div>
 
-    <!-- Variant fields are only shown when creating; existing variants are managed elsewhere -->
+        <div>
+            <label>Name
+                <input type="text" name="name" required value="<?= e($form['name']) ?>" placeholder="e.g. GeForce RTX 4060">
+            </label>
+            <div class="row">
+                <label>Brand
+                    <input type="text" name="brand" value="<?= e($form['brand']) ?>" placeholder="e.g. MSI">
+                </label>
+                <label>Category
+                    <select name="category_id">
+                        <option value="">— None —</option>
+                        <?php foreach ($categories as $c): ?>
+                            <option value="<?= $c['id'] ?>" <?= (string) $form['category_id'] === (string) $c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label>Status tag
+                    <select name="status">
+                        <?php foreach (STATUS_TAGS as $t): ?>
+                            <option <?= $form['status'] === $t ? 'selected' : '' ?>><?= e($t) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+            </div>
+            <label>Notes
+                <textarea name="notes" rows="3" placeholder="Optional"><?= e($form['notes']) ?></textarea>
+            </label>
+        </div>
+    </div>
+
     <?php if (!$isEdit): ?>
-        <h2>First variant</h2>
-        <p class="muted small">You can add more variants (capacity, color, model…) after saving.</p>
-        <div class="row">
-            <label>Variant label
-                <input type="text" name="label" required value="<?= e($form['label']) ?>" placeholder="e.g. 8GB / Black">
-            </label>
-            <label>SKU
-                <input type="text" name="sku" value="<?= e($form['sku']) ?>">
-            </label>
-        </div>
-        <div class="row">
-            <label>Opening qty
-                <input type="number" name="quantity" min="0" value="<?= e($form['quantity']) ?>">
-            </label>
-            <label>Unit cost
-                <input type="number" name="unit_cost" min="0" step="0.01" value="<?= e($form['unit_cost']) ?>">
-            </label>
-            <label>Sell price
-                <input type="number" name="sell_price" min="0" step="0.01" value="<?= e($form['sell_price']) ?>">
-            </label>
-            <label>Low-stock at
-                <input type="number" name="low_threshold" min="0" value="<?= e($form['low_threshold']) ?>">
-            </label>
-        </div>
+        <h2>Variants</h2>
+        <p class="muted small">Add every version of this product here — capacity, color, model… They are all saved together with the product.</p>
+        <?php include __DIR__ . '/includes/variant_rows.php'; ?>
     <?php endif; ?>
 
     <div class="form-actions">
-        <button class="btn primary"><?= $isEdit ? 'Save changes' : 'Register item' ?></button>
+        <button class="btn primary"><?= $isEdit ? 'Save changes' : 'Register product' ?></button>
+        <?php if ($isEdit): ?><span class="muted small">Variants are edited on the <a href="item_view.php?id=<?= $id ?>">product page</a>.</span><?php endif; ?>
     </div>
 </form>
 
