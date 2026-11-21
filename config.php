@@ -39,7 +39,7 @@ const ADJUST_REASONS = ['Count correction', 'Damaged', 'Customer return', 'Inter
 
 // Full path to python.exe. A full path works even when Apache doesn't
 // know your PATH. Find yours with:  python -c "import sys; print(sys.executable)"
-define('PYTHON_BIN', 'C:\\Users\\Sunny\\AppData\\Local\\Programs\\Python\\Python313\\python.exe');
+define('PYTHON_BIN', 'C:\\Users\\HP\\AppData\\Local\\Python\\pythoncore-3.15-64\\python.exe');
 
 // Limits that keep each request small (and your bill predictable)
 define('CHAT_MAX_TURNS', 20);       // only the last 20 messages are sent to Gemini
