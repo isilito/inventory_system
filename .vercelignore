@@ -1,0 +1,8 @@
+# Never upload secrets: on Vercel they go in Settings → Environment Variables
+.env
+
+# Not needed to run the site
+presentation/
+PartsBin-Code-Report.pdf
+partsbin_full.sql
+uploads/avatars/

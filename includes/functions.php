@@ -126,48 +126,55 @@ function upload_image(string $field, string $folder): array
         return ['', 'Only JPG, PNG, GIF or WEBP pictures are allowed.'];
     }
 
-    if (getimagesize($file['tmp_name']) === false) {
+    // getimagesize() reads the picture's header: false means it isn't a real image
+    $info = is_uploaded_file($file['tmp_name']) ? getimagesize($file['tmp_name']) : false;
+    if ($info === false) {
         return ['', 'That file is not a valid picture.'];
     }
 
-    // Create the destination folder the first time
-    $targetDir = UPLOAD_DIR . $folder . '/';
-    if (!is_dir($targetDir)) {
-        mkdir($targetDir, 0777, true);
-    }
-
-    // Give the file a new unique name so uploads never overwrite each other
+    // Give the picture a new unique name so uploads never overwrite each other
     // and a user can't choose a dangerous file name
     $newName = $folder . '_' . uniqid() . '.' . $extension;
 
-    // Move the file from PHP's temporary folder into uploads/<folder>/
-    if (!move_uploaded_file($file['tmp_name'], $targetDir . $newName)) {
-        return ['', 'Could not save the picture on the server.'];
-    }
+    // Save the picture's bytes in the `images` table (works on any host, even without a disk)
+    save_image($newName, $info['mime'], file_get_contents($file['tmp_name']));
 
     return [$newName, ''];
 }
 
-// Deletes an uploaded picture from disk (used when replacing or deleting)
+// Stores a picture in the database under $name
+function save_image(string $name, string $mime, string $bytes): void
+{
+    db_run('REPLACE INTO images (name, mime, data) VALUES (?, ?, ?)', 'sss', [$name, $mime, $bytes]);
+}
+
+// Deletes a picture (used when replacing or deleting): from the database,
+// and from uploads/ for pictures saved as files by older versions
 function delete_image(string $folder, ?string $fileName): void
 {
     if ($fileName === null || $fileName === '') {
         return;
     }
 
+    db_run('DELETE FROM images WHERE name = ?', 's', [basename($fileName)]);
+
     $path = UPLOAD_DIR . $folder . '/' . basename($fileName);
     if (file_exists($path)) {
-        unlink($path);
+        @unlink($path);   // @: on Vercel the disk is read-only, which is fine
     }
 }
 
 // URL for a picture, or a placeholder image when there is none
 function image_url(string $folder, ?string $fileName): string
 {
-    if ($fileName !== null && $fileName !== '' && file_exists(UPLOAD_DIR . $folder . '/' . $fileName)) {
+    if ($fileName === null || $fileName === '') {
+        return $folder === 'avatars' ? 'assets/img/no-avatar.svg' : 'assets/img/no-image.svg';
+    }
+    // An older picture saved as a file: let the web server send it directly
+    if (file_exists(UPLOAD_DIR . $folder . '/' . $fileName)) {
         return UPLOAD_URL . $folder . '/' . rawurlencode($fileName);
     }
-    return $folder === 'avatars' ? 'assets/img/no-avatar.svg' : 'assets/img/no-image.svg';
+    return 'image.php?name=' . rawurlencode($fileName);
 }
 
 

@@ -13,24 +13,58 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
 try {
     // 1) Connect to the MySQL server (no database selected yet)
-    $conn = new mysqli(DB_HOST, DB_USER, DB_PASS);
+    $conn  = mysqli_init();
+    $flags = 0;
+    if (DB_SSL) {
+        // Hosted databases only accept encrypted connections
+        $conn->ssl_set(null, null, db_ca_file(), null, null);
+        $flags = MYSQLI_CLIENT_SSL;
+    }
+    $conn->real_connect(DB_HOST, DB_USER, DB_PASS, null, DB_PORT, null, $flags);
 } catch (mysqli_sql_exception $ex) {
-    // The most common cause on XAMPP: MySQL isn't started
-    die('<h2>Cannot connect to MySQL</h2>'
-        . '<p>Open the XAMPP Control Panel and click <b>Start</b> next to MySQL, then reload this page.</p>'
+    $hint = DB_HOST === 'localhost' || DB_HOST === '127.0.0.1'
+        ? 'Open the XAMPP Control Panel and click <b>Start</b> next to MySQL, then reload this page.'   // most common cause on XAMPP
+        : 'Check DB_HOST, DB_PORT, DB_USER, DB_PASS and DB_SSL in your environment variables.';
+    die('<h2>Cannot connect to MySQL</h2><p>' . $hint . '</p>'
         . '<p><small>' . htmlspecialchars($ex->getMessage()) . '</small></p>');
 }
 
 $conn->set_charset('utf8mb4');
 
-// 2) Create the database if it doesn't exist yet, then select it
-$conn->query('CREATE DATABASE IF NOT EXISTS `' . DB_NAME . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci');
+// Use the app's time zone for DEFAULT CURRENT_TIMESTAMP columns
+// (hosted databases run on UTC; XAMPP uses the PC's clock)
+$conn->query("SET time_zone = '" . date('P') . "'");
+
+// 2) Create the database if it doesn't exist yet, then select it.
+// Hosted databases are usually created in their dashboard, and the
+// account may not be allowed to create one, so a failure here is fine.
+try {
+    $conn->query('CREATE DATABASE IF NOT EXISTS `' . DB_NAME . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci');
+} catch (mysqli_sql_exception $ex) {
+}
 $conn->select_db(DB_NAME);
 
-// 3) First run? (no `users` table yet) -> build tables and add sample data
-$check = $conn->query("SHOW TABLES LIKE 'users'");
-if ($check->num_rows === 0) {
+// 3) First run? (no `users` table yet) -> build tables and add sample data.
+// Older installs that miss the newer tables just get those created.
+$tables = array_column($conn->query('SHOW TABLES')->fetch_all(), 0);
+if (!in_array('users', $tables, true)) {
     install_database();
+} elseif (!in_array('sessions', $tables, true) || !in_array('images', $tables, true)) {
+    create_tables();
+}
+
+// CA certificate for encrypted connections: DB_SSL_CA, or the server's usual bundle
+function db_ca_file(): ?string
+{
+    if (DB_SSL_CA !== '') {
+        return DB_SSL_CA;
+    }
+    foreach (['/etc/pki/tls/certs/ca-bundle.crt', '/etc/ssl/certs/ca-certificates.crt', '/etc/ssl/cert.pem'] as $path) {
+        if (is_file($path)) {
+            return $path;
+        }
+    }
+    return null;
 }
 
 
@@ -92,6 +126,16 @@ function db_insert_id(): int
 
 function install_database(): void
 {
+    create_tables();
+
+    // Sample categories, products, pictures and a demo account
+    require_once __DIR__ . '/seed.php';
+    seed_sample_data();
+}
+
+// Runs database.sql (every statement is CREATE TABLE IF NOT EXISTS, so it's safe to repeat)
+function create_tables(): void
+{
     global $conn;
 
     // Read the SQL file from disk and run every statement in it
@@ -106,8 +150,4 @@ function install_database(): void
             $result->free();
         }
     } while ($conn->more_results() && $conn->next_result());
-
-    // Sample categories, products, pictures and a demo account
-    require_once __DIR__ . '/seed.php';
-    seed_sample_data();
 }

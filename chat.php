@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/includes/chat.php';
+require_once __DIR__ . '/includes/gemini.php';
 
 // Send one line of NDJSON to the browser right away
 function send_event(array $event): void
@@ -66,7 +67,7 @@ if (!$messages || end($messages)['role'] !== 'user') {
     fail(400, 'Type a question first.');
 }
 
-// ---------- 3. Run the Python script and stream its answer back ----------
+// ---------- 3. Ask Gemini and stream its answer back ----------
 
 // Turn off every output buffer so each piece reaches the browser immediately
 @ini_set('zlib.output_compression', '0');
@@ -76,54 +77,21 @@ if (function_exists('apache_setenv')) {
 while (ob_get_level() > 0) {
     ob_end_flush();
 }
-set_time_limit(150);
+set_time_limit(90);
+
+$system = chat_system_prompt($user, chat_inventory_snapshot());
 
 header('Content-Type: application/x-ndjson; charset=utf-8');
 header('Cache-Control: no-cache');
 header('X-Accel-Buffering: no');
 
-// proc_open() starts a program and gives us "pipes" to talk to it:
-//   0 = its input (we write the question), 1 = its output (we read the answer).
-// Its error output (2) goes to a temp file, so we can show it if Python crashes.
-$errorLog = tempnam(sys_get_temp_dir(), 'pbchat');
-$process  = proc_open(
-    [PYTHON_BIN, __DIR__ . '/ai/gemini_chat.py'],
-    [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', $errorLog, 'w']],
-    $pipes,
-    __DIR__
-);
-if (!is_resource($process)) {
-    fail(500, 'Could not start Python. Install Python 3, or set PYTHON_BIN_OVERRIDE in config.php.');
-}
+// Every piece of the answer goes to the browser as soon as Gemini sends it
+$result = gemini_stream($system, $messages, function (string $text): void {
+    send_event(['type' => 'text', 'text' => $text]);
+});
 
-// Send the question to Python, then close its input so it knows we're done
-fwrite($pipes[0], json_encode([
-    'system'   => chat_system_prompt($user, chat_inventory_snapshot()),
-    'messages' => $messages,
-], JSON_UNESCAPED_UNICODE));
-fclose($pipes[0]);
-
-// Python prints one JSON line per piece of the answer. Pass each one on
-// to the browser as soon as it arrives.
-$finished = false;
-while (($line = fgets($pipes[1])) !== false) {
-    $event = json_decode($line, true);
-    if (!is_array($event)) {
-        continue;                       // ignore anything that isn't our JSON
-    }
-    send_event($event);
-    if (in_array($event['type'] ?? '', ['done', 'error'], true)) {
-        $finished = true;
-    }
+if (isset($result['error'])) {
+    send_event(['type' => 'error', 'message' => $result['error']]);
+} else {
+    send_event(['type' => 'done', 'stop' => $result['stop']]);
 }
-fclose($pipes[1]);
-$exitCode = proc_close($process);
-
-// Python stopped without saying "done" or "error": it crashed
-if (!$finished) {
-    $details = trim((string) file_get_contents($errorLog));
-    $lines    = explode("\n", $details);
-    $lastLine = $details === '' ? "exit code $exitCode" : end($lines);   // e.g. ModuleNotFoundError: ...
-    send_event(['type' => 'error', 'message' => 'The Python script failed: ' . $lastLine]);
-}
-@unlink($errorLog);

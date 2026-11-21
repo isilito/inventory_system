@@ -57,3 +57,21 @@ CREATE TABLE IF NOT EXISTS stock_movements (
     FOREIGN KEY (variant_id) REFERENCES variants(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id)    REFERENCES users(id)    ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Login sessions. Kept here instead of in files so logins also work on
+-- hosts like Vercel, where each request can run on a different server.
+CREATE TABLE IF NOT EXISTS sessions (
+    id         VARCHAR(128) NOT NULL PRIMARY KEY,
+    data       MEDIUMBLOB   NOT NULL,
+    updated_at INT UNSIGNED NOT NULL,
+    INDEX (updated_at)
+) ENGINE=InnoDB;
+
+-- Uploaded pictures (product photos and avatars). `name` is what
+-- items.image / users.avatar store; image.php sends the picture.
+CREATE TABLE IF NOT EXISTS images (
+    name       VARCHAR(255) NOT NULL PRIMARY KEY,
+    mime       VARCHAR(50)  NOT NULL,
+    data       MEDIUMBLOB   NOT NULL,
+    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;

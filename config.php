@@ -1,14 +1,52 @@
 <?php
 /**
  * config.php
- * Global settings for PartsBin. Change these values to fit your setup.
+ * Global settings for PartsBin.
+ *
+ * Secrets and server-specific values (database login, Gemini key) are read
+ * with env(): first from real environment variables (that's how Vercel passes
+ * them), then from the .env file in this folder (XAMPP). Anything missing
+ * falls back to the XAMPP default shown below.
  */
 
+// Reads one setting: environment variable first, then the .env file
+function env(string $key, string $default = ''): string
+{
+    static $fromFile = null;
+
+    $value = getenv($key);
+    if ($value !== false && $value !== '') {
+        return $value;
+    }
+
+    // Read .env once: KEY=value lines, # starts a comment
+    if ($fromFile === null) {
+        $fromFile = [];
+        $path = __DIR__ . '/.env';
+        if (is_file($path)) {
+            foreach (file($path, FILE_IGNORE_NEW_LINES) as $line) {
+                $line = trim($line);
+                if ($line === '' || $line[0] === '#' || strpos($line, '=') === false) {
+                    continue;
+                }
+                list($name, $val) = explode('=', $line, 2);
+                $fromFile[trim($name)] = trim(trim($val), '"\'');
+            }
+        }
+    }
+
+    return ($fromFile[$key] ?? '') !== '' ? $fromFile[$key] : $default;
+}
+
 // ---------- Database (XAMPP defaults: user "root", no password) ----------
-define('DB_HOST', 'localhost');
-define('DB_USER', 'root');
-define('DB_PASS', '');
-define('DB_NAME', 'partsbin');
+define('DB_HOST', env('DB_HOST', 'localhost'));
+define('DB_PORT', (int) env('DB_PORT', '3306'));
+define('DB_USER', env('DB_USER', 'root'));
+define('DB_PASS', env('DB_PASS', ''));
+define('DB_NAME', env('DB_NAME', 'partsbin'));
+// Hosted MySQL (Aiven, TiDB Cloud...) needs an encrypted connection: DB_SSL=true
+define('DB_SSL', strtolower(env('DB_SSL', 'false')) === 'true');
+define('DB_SSL_CA', env('DB_SSL_CA'));   // optional path to the provider's CA certificate
 
 // ---------- App ----------
 define('APP_NAME', 'PartsBin');
@@ -19,7 +57,9 @@ date_default_timezone_set('Asia/Manila');
 define('DEFAULT_THRESHOLD', 2);
 
 // ---------- Picture uploads ----------
-// Folder on disk where uploaded pictures are saved, and the matching URL path
+// Uploaded pictures are stored in the `images` table (see image.php), so they
+// also work on hosts without a permanent disk. Older pictures that already
+// exist as files in uploads/ are still served from there.
 define('UPLOAD_DIR', __DIR__ . '/uploads/');
 define('UPLOAD_URL', 'uploads/');
 
@@ -33,48 +73,11 @@ const STATUS_TAGS = ['New', 'Used', 'Refurbished', 'Defective', 'Discontinued'];
 // Reasons offered on the stock adjustment form
 const ADJUST_REASONS = ['Count correction', 'Damaged', 'Customer return', 'Internal use', 'Lost / stolen', 'Other'];
 
-// ---------- AI assistant (Google Gemini, through Python) ----------
-// chat.php runs ai/gemini_chat.py, which talks to Gemini.
-const PYTHON_BIN_OVERRIDE = '';
-
-/**
- * Looks for python.exe in the usual install folders and returns the newest one.
- * Apache often doesn't know your PATH, so we search the folders directly.
- */
-function find_python(): string
-{
-    if (PYTHON_BIN_OVERRIDE !== '') {
-        return PYTHON_BIN_OVERRIDE;
-    }
-
-    $patterns = [];
-    if (DIRECTORY_SEPARATOR === '\\') {   // Windows
-        $local = getenv('LOCALAPPDATA') ?: '';
-        if ($local !== '') {
-            $patterns[] = $local . '\\Python\\pythoncore-*\\python.exe';      // Python install manager (python.org, 3.14+)
-            $patterns[] = $local . '\\Programs\\Python\\Python3*\\python.exe'; // classic python.org installer
-        }
-        $patterns[] = 'C:\\Program Files\\Python3*\\python.exe';               // "install for all users"
-        $patterns[] = 'C:\\Python3*\\python.exe';
-        // When Apache runs as a Windows service it has no LOCALAPPDATA, so also check every user folder
-        $patterns[] = 'C:\\Users\\*\\AppData\\Local\\Python\\pythoncore-*\\python.exe';
-        $patterns[] = 'C:\\Users\\*\\AppData\\Local\\Programs\\Python\\Python3*\\python.exe';
-    } else {                              // macOS / Linux
-        $patterns = ['/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/usr/bin/python3'];
-    }
-
-    foreach ($patterns as $pattern) {
-        $found = glob($pattern) ?: [];
-        if ($found) {
-            usort($found, fn($a, $b) => strnatcasecmp($b, $a));   // newest version first (3.13 before 3.9)
-            return $found[0];
-        }
-    }
-
-    return 'python';   // last resort: hope it's on Apache's PATH
-}
-
-define('PYTHON_BIN', find_python());
+// ---------- AI assistant (Google Gemini) ----------
+// chat.php asks Gemini through includes/gemini.php (plain PHP + curl).
+define('GEMINI_API_KEY', env('GEMINI_API_KEY'));
+define('GEMINI_MODEL', env('GEMINI_MODEL', 'gemini-3.5-flash-lite'));
+define('GEMINI_THINKING', strtoupper(env('GEMINI_THINKING', 'LOW')));   // MINIMAL, LOW, MEDIUM or HIGH
 
 // Limits that keep each request small (and your bill predictable)
 define('CHAT_MAX_TURNS', 20);       // only the last 20 messages are sent to Gemini

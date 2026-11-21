@@ -14,11 +14,36 @@ from `database.sql` and fills them with sample products, pictures and stock hist
 
 **Demo login:** `admin` / `admin123` — or click *Sign up* to make your own account.
 
-Database settings (host, user, password, database name) are at the top of `config.php`.
-XAMPP's defaults (`root`, no password) work out of the box.
+XAMPP's database defaults (`localhost`, `root`, no password, database `partsbin`) work
+out of the box. To use another database, set `DB_HOST`, `DB_USER`, ... in `.env` (see `.env.example`).
 
-**Start over:** in phpMyAdmin drop the `partsbin` database, delete the files inside
-`uploads/products/` and `uploads/avatars/`, then reload the page.
+**Start over:** in phpMyAdmin drop the `partsbin` database, then reload the page.
+
+## Deploying to Vercel
+
+Vercel runs the PHP through the community [vercel-php](https://github.com/vercel-community/php) runtime.
+`vercel.json` sends every request to `api/index.php`, which runs the matching page
+(`/items.php` → `items.php`). Files in `assets/` and `uploads/` are sent as they are.
+
+Vercel has no MySQL and no permanent disk, so:
+
+- the **database** must be a hosted MySQL, e.g. Aiven for MySQL (free plan) or TiDB Cloud Serverless
+- **logins** (sessions) are stored in the `sessions` table: `includes/session.php`
+- **uploaded pictures** are stored in the `images` table and sent by `image.php`
+
+Steps:
+
+1. Create a free MySQL database and copy its host, port, user and password
+2. On <https://vercel.com/new>, import this GitHub repository (Framework preset: **Other**)
+3. Under **Environment Variables** add `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME`,
+   `DB_SSL=true`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_THINKING` (see `.env.example`)
+4. Deploy. On the first visit the app builds the tables and loads the sample data, just like on XAMPP.
+
+To bring your local data instead: export the `partsbin` database in phpMyAdmin and import it
+into the hosted database before the first visit.
+
+Test the Vercel setup on your own PC: `php -S localhost:8000 api/index.php` (pictures and CSS
+won't load this way, because on Vercel those come from `vercel.json`'s routes).
 
 ## Features
 
@@ -34,24 +59,17 @@ XAMPP's defaults (`root`, no password) work out of the box.
 | Categories | `categories.php` |
 | Restock history | `restocks.php` — filter by date and supplier |
 | Valuation | `valuation.php` — value at cost and retail by category |
-| AI assistant (Gemini) | floating chat button, bottom right of every page — `chat.php` (back end), `includes/chat.php` (prompt + live inventory), `ai/gemini_chat.py` (Python ↔ Gemini), `includes/chat_widget.php`, `assets/chat.js` |
+| AI assistant (Gemini) | floating chat button, bottom right of every page — `chat.php` (back end), `includes/chat.php` (prompt + live inventory), `includes/gemini.php` (PHP ↔ Gemini with curl), `includes/chat_widget.php`, `assets/chat.js` |
 
 ## Setting up the AI assistant
 
-PHP builds the question (instructions + live inventory) and runs `ai/gemini_chat.py`,
-which sends it to Google Gemini and streams the answer back.
+PHP builds the question (instructions + live inventory), sends it to Google Gemini's
+REST API with curl (`includes/gemini.php`) and streams the answer back. No Python needed.
 
-Do this once on **every PC** that runs the app:
-
-1. Install Python 3 from <https://www.python.org/downloads/> (tick *Add python.exe to PATH*)
-2. In the project folder, install the libraries: `python -m pip install -r ai/requirements.txt`
-3. Copy `.env.example` to `.env` and paste **your own** key from <https://aistudio.google.com/apikey>
+1. Copy `.env.example` to `.env` and paste **your own** key from <https://aistudio.google.com/apikey>
    (free; each teammate can make one). Never commit or share the key — Google disables keys
-   it finds online. `.htaccess` blocks browsers from opening `.env`.
-4. Restart Apache in the XAMPP Control Panel
-
-`config.php` finds `python.exe` by itself. If the chat says *Could not start Python*, or you
-have more than one Python, put the full path in `PYTHON_BIN_OVERRIDE` in `config.php`.
+   it finds online. `.env` is in `.gitignore`, and `.htaccess` blocks browsers from opening it.
+   On Vercel, put the key in the project's Environment Variables instead.
 
 Model and thinking level are in `.env`. `gemini-3.5-flash-lite` is fast and free;
 `gemini-4-hydrogen` is smarter but often times out on the free tier.
@@ -60,13 +78,10 @@ Model and thinking level are in `.env`. `gemini-3.5-flash-lite` is fast and free
 
 | Message | Fix |
 |---|---|
-| Could not start Python | Install Python (step 1), or set `PYTHON_BIN_OVERRIDE` |
-| The Python script failed: ModuleNotFoundError | Run step 2 — with the same Python the app uses |
-| Gemini rejected the API key | Make a new key (step 3) |
-| Gemini is having trouble (504) / Could not reach Gemini | Switch `GEMINI_MODEL` to `gemini-3.5-flash-lite`, check the internet |
-
-Test the Python part on its own from the project folder:
-`echo {"system": "Be brief.", "messages": [{"role": "user", "content": "Hi!"}]} | python ai/gemini_chat.py`
+| No API key | Do step 1 |
+| Gemini rejected the API key | Make a new key (step 1) |
+| Free-tier limit reached | Wait a minute |
+| Gemini is having trouble / Could not reach Gemini | Switch `GEMINI_MODEL` to `gemini-3.5-flash-lite`, check the internet |
 
 ## PHP topics used — where to find them
 
@@ -74,10 +89,11 @@ Test the Python part on its own from the project folder:
 |---|---|
 | **Superglobals** | `$_POST` (every form), `$_GET` (filters, ids), `$_SESSION` (logged-in user, flash messages), `$_FILES` (picture uploads), `$_SERVER` (`REQUEST_METHOD` in `is_post()`, `PHP_SELF` in `header.php`) |
 | **`$_POST`** | `login.php`, `signup.php`, `profile.php`; arrays like `$_POST['variant_label'][]` in `variants_from_post()` |
-| **File transfer / manipulation** | `upload_image()` and `delete_image()` in `includes/functions.php` (`move_uploaded_file`, `pathinfo`, `getimagesize`, `mkdir`, `unlink`, `file_exists`); `file_get_contents()` in `db.php`; `copy()` in `seed.php` |
-| **Database connection** | `includes/db.php` — `new mysqli()`, `prepare()`, `bind_param()`, `execute()`, `get_result()`, `multi_query()` |
+| **File transfer / manipulation** | `upload_image()` and `delete_image()` in `includes/functions.php` (`is_uploaded_file`, `pathinfo`, `getimagesize`, `file_get_contents`, `unlink`, `file_exists`); pictures saved in the `images` table and sent by `image.php` (`header()`, `echo`); `file_get_contents()` in `db.php` and `seed.php` |
+| **Database connection** | `includes/db.php` — `mysqli_init()`, `real_connect()`, `prepare()`, `bind_param()`, `execute()`, `get_result()`, `multi_query()` |
+| **Sessions** | `session_start()` in `bootstrap.php`; stored in MySQL by a `SessionHandlerInterface` class in `includes/session.php` |
 | **Password hashing** | `password_hash()` in `signup.php`, `profile.php`, `seed.php`; `password_verify()` in `login.php`, `profile.php` |
-| **Running Python from PHP (chat)** | `chat.php` — `proc_open()`, `fwrite()` / `fgets()` on pipes, `file_get_contents('php://input')`, `json_encode()` / `json_decode()`, `session_write_close()`, `flush()` for streaming |
+| **Calling a web API (chat)** | `includes/gemini.php` — `curl_init()`, `curl_setopt_array()` with `CURLOPT_WRITEFUNCTION` to read the streamed answer; `chat.php` — `file_get_contents('php://input')`, `json_encode()` / `json_decode()`, `session_write_close()`, `flush()` for streaming |
 
 A full walkthrough of the code is in **PartsBin-Code-Report.pdf**.
 
@@ -94,13 +110,17 @@ A full walkthrough of the code is in **PartsBin-Code-Report.pdf**.
 ## File layout
 
 ```
-config.php                 settings (database, uploads, tags, Python path, chat limits)
-.env / .env.example        Gemini API key, model, thinking level (.env is private)
-.htaccess                  stops browsers from opening .env
+config.php                 settings (database, uploads, tags, Gemini, chat limits) + env()
+.env / .env.example        API key, model, database login (.env is private, not in git)
+.htaccess                  stops browsers from opening .env (XAMPP)
+vercel.json / .vercelignore  Vercel: PHP runtime, routes, files not to upload
+api/index.php              Vercel entry point: runs the requested page
 database.sql               table definitions (run automatically on first visit)
-chat.php                   chat back end: checks the request, runs Python, streams the answer
-ai/gemini_chat.py          Python: asks Google Gemini, prints the answer piece by piece
-includes/bootstrap.php     session + imports, loaded by every page
+chat.php                   chat back end: checks the request, asks Gemini, streams the answer
+image.php                  sends a picture stored in the `images` table
+includes/gemini.php        asks Google Gemini with curl, reads the answer piece by piece
+includes/bootstrap.php     imports + session, loaded by every page
+includes/session.php       stores sessions in MySQL (needed on Vercel)
 includes/db.php            MySQL connection, query helpers, first-run installer
 includes/functions.php     helpers: login, uploads, variants, stock logic
 includes/seed.php          sample data + demo account
@@ -111,6 +131,5 @@ includes/movements_table.php  shared stock history table
 includes/chat.php          live inventory snapshot + instructions for Gemini
 includes/chat_widget.php   the floating chat button and panel
 assets/                    style.css, app.js, chat.js, placeholder + sample pictures
-uploads/products/          uploaded product pictures
-uploads/avatars/           uploaded profile pictures
+uploads/products/          sample product pictures (new uploads go in the `images` table)
 ```

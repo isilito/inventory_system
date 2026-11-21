@@ -122,22 +122,16 @@ function seed_sample_data(): void
 
     $suppliers = ['TechSource Distribution', 'PC Hub Wholesale', 'Metro Components'];
 
-    // Make sure uploads/products/ exists before copying pictures into it
-    $productDir = UPLOAD_DIR . 'products/';
-    if (!is_dir($productDir)) {
-        mkdir($productDir, 0777, true);
-    }
-
     $count = 0;
     foreach ($items as $item) {
         $count++;
         list($category, $name, $brand, $tag, $sample, $variants) = $item;
 
-        // Copy the sample picture into uploads/products/ like a real upload
+        // Store the sample picture in the `images` table like a real upload
         $image  = 'products_sample_' . $count . '_' . $sample;
         $source = __DIR__ . '/../assets/samples/' . $sample;
         if (file_exists($source)) {
-            copy($source, $productDir . $image);
+            save_image($image, getimagesize($source)['mime'], file_get_contents($source));
         } else {
             $image = null;
         }
