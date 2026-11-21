@@ -1,0 +1,8 @@
+﻿# Secrets: copy .env.example to .env on each PC
+.env
+
+# Pictures people upload while using the app
+uploads/avatars/
+
+# Vercel CLI
+.vercel

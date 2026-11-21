@@ -1,10 +1,4 @@
--- PartsBin database schema (MySQL / MariaDB)
---
--- The app runs this file automatically the first time it connects,
--- so you normally don't need to import it. To set it up by hand instead,
--- create a database named `partsbin` in phpMyAdmin and import this file.
-
--- Accounts that can log in. `password` holds a password_hash(), never plain text.
+-- PartsBin database schema 
 CREATE TABLE IF NOT EXISTS users (
     id         INT AUTO_INCREMENT PRIMARY KEY,
     full_name  VARCHAR(100) NOT NULL,

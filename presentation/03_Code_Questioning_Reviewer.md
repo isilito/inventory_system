@@ -377,7 +377,6 @@ Stock status (`functions.php:177-186`): `qty <= 0` → Out of stock, `qty <= thr
 40. **Do you have CSRF protection?** → The AI endpoint checks a custom header that other sites can't send. The regular forms don't have CSRF tokens yet. That would be the next improvement: a random token in `$_SESSION` plus a hidden input, compared on submit.
 41. **Are there user roles (admin vs staff)?** → Not yet. Every logged-in account has the same access. A `role` column on `users` plus a check in `require_login()` would add that.
 42. **`movement_list()` puts `$where` directly into the SQL. Isn't that injection?** → `$where` is only ever built by our own code from fixed strings like `'m.variant_id = ?'`. User values always go in `$params` and are bound. `$limit` is an `int` parameter, so it can only be a number.
-43. **What are `includes/store.php` and `data/inventory.php`?** → *(See the note at the bottom of this file. Decide your answer before the presentation.)*
 
 ---
 
@@ -405,4 +404,4 @@ Stock status (`functions.php:177-186`): `qty <= 0` → Out of stock, `qty <= thr
 ---
 
 > **⚠ Note for the group: `includes/store.php` and `data/inventory.php`**
-> These two files are left over from an older version that saved data in a PHP file instead of MySQL. **No page uses them anymore** (nothing includes `store.php`, and the `DATA_FILE` constant it needs isn't defined). Before the presentation, either **delete both files** so the panel doesn't ask, or be ready to say: *"That's our first prototype, which stored data in a file with `var_export()`. We moved to MySQL, and the file is no longer included anywhere."*
+> These two files are left over from an older version that saved data in a 

@@ -21,7 +21,6 @@ try {
         . '<p><small>' . htmlspecialchars($ex->getMessage()) . '</small></p>');
 }
 
-// Use UTF-8 so names like "Café" or "₱" are stored correctly
 $conn->set_charset('utf8mb4');
 
 // 2) Create the database if it doesn't exist yet, then select it

@@ -35,12 +35,6 @@ const ADJUST_REASONS = ['Count correction', 'Damaged', 'Customer return', 'Inter
 
 // ---------- AI assistant (Google Gemini, through Python) ----------
 // chat.php runs ai/gemini_chat.py, which talks to Gemini.
-// The API key and model are in the .env file (see .env.example).
-
-// Python is found automatically on each PC (see find_python() below), so
-// teammates don't need to edit this file. Only if the chat says it can't start
-// Python, or you have several Pythons, put the full path here instead. Find yours with:
-//   python -c "import sys; print(sys.executable)"
 const PYTHON_BIN_OVERRIDE = '';
 
 /**

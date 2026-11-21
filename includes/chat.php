@@ -1,12 +1,6 @@
 <?php
 /**
  * chat.php (include)
- * Builds what Gemini needs to know before it answers: who it is
- * (the system prompt) and the shop's current stock (read from MySQL).
- *
- * Gemini can't see your database. Instead, every time someone sends a
- * message we turn the inventory into plain text and send it along.
- * PartsBin is small (dozens of variants), so the whole list fits easily.
  */
 
 // The whole inventory as compact text lines, one line per variant

@@ -1,18 +1,4 @@
 <?php
-/**
- * chat.php — the chatbot's back end (called by assets/chat.js, never opened directly)
- *
- * 1. The browser POSTs the conversation as JSON: {"messages": [{role, content}, ...]}
- * 2. We check it, add the system prompt + live inventory, and hand it to
- *    ai/gemini_chat.py (Python), which sends it to Google Gemini
- * 3. Gemini's answer is "streamed": Python prints it a few words at a time, and we pass
- *    each piece straight on to the browser so the reply appears as it's written.
- *
- * The browser receives one JSON object per line ("NDJSON"):
- *   {"type":"text","text":"Hello"}      a piece of the answer
- *   {"type":"done","stop":"done"}       finished (stop: done / max_tokens / blocked)
- *   {"type":"error","message":"..."}    something went wrong
- */
 
 require_once __DIR__ . '/includes/bootstrap.php';
 require_once __DIR__ . '/includes/chat.php';
