@@ -107,7 +107,7 @@ $process  = proc_open(
     __DIR__
 );
 if (!is_resource($process)) {
-    fail(500, 'Could not start Python. Check PYTHON_BIN in config.php.');
+    fail(500, 'Could not start Python. Install Python 3, or set PYTHON_BIN_OVERRIDE in config.php.');
 }
 
 // Send the question to Python, then close its input so it knows we're done

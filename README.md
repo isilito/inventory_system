@@ -41,11 +41,29 @@ XAMPP's defaults (`root`, no password) work out of the box.
 PHP builds the question (instructions + live inventory) and runs `ai/gemini_chat.py`,
 which sends it to Google Gemini and streams the answer back.
 
-1. Install Python 3, then: `pip install google-genai python-dotenv`
-2. Copy `.env.example` to `.env` and paste your key from <https://aistudio.google.com/apikey>
-   (`.htaccess` blocks browsers from opening `.env`)
-3. Set `PYTHON_BIN` at the bottom of `config.php` to your `python.exe`
-4. Model and thinking level are in `.env` (`gemini-4-hydrogen` and `gemini-3.5-flash-lite` are free-tier models)
+Do this once on **every PC** that runs the app:
+
+1. Install Python 3 from <https://www.python.org/downloads/> (tick *Add python.exe to PATH*)
+2. In the project folder, install the libraries: `python -m pip install -r ai/requirements.txt`
+3. Copy `.env.example` to `.env` and paste **your own** key from <https://aistudio.google.com/apikey>
+   (free; each teammate can make one). Never commit or share the key — Google disables keys
+   it finds online. `.htaccess` blocks browsers from opening `.env`.
+4. Restart Apache in the XAMPP Control Panel
+
+`config.php` finds `python.exe` by itself. If the chat says *Could not start Python*, or you
+have more than one Python, put the full path in `PYTHON_BIN_OVERRIDE` in `config.php`.
+
+Model and thinking level are in `.env`. `gemini-3.5-flash-lite` is fast and free;
+`gemini-4-hydrogen` is smarter but often times out on the free tier.
+
+**If the chat shows an error:**
+
+| Message | Fix |
+|---|---|
+| Could not start Python | Install Python (step 1), or set `PYTHON_BIN_OVERRIDE` |
+| The Python script failed: ModuleNotFoundError | Run step 2 — with the same Python the app uses |
+| Gemini rejected the API key | Make a new key (step 3) |
+| Gemini is having trouble (504) / Could not reach Gemini | Switch `GEMINI_MODEL` to `gemini-3.5-flash-lite`, check the internet |
 
 Test the Python part on its own from the project folder:
 `echo {"system": "Be brief.", "messages": [{"role": "user", "content": "Hi!"}]} | python ai/gemini_chat.py`

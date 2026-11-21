@@ -37,9 +37,50 @@ const ADJUST_REASONS = ['Count correction', 'Damaged', 'Customer return', 'Inter
 // chat.php runs ai/gemini_chat.py, which talks to Gemini.
 // The API key and model are in the .env file (see .env.example).
 
-// Full path to python.exe. A full path works even when Apache doesn't
-// know your PATH. Find yours with:  python -c "import sys; print(sys.executable)"
-define('PYTHON_BIN', 'C:\\Users\\HP\\AppData\\Local\\Python\\pythoncore-3.15-64\\python.exe');
+// Python is found automatically on each PC (see find_python() below), so
+// teammates don't need to edit this file. Only if the chat says it can't start
+// Python, or you have several Pythons, put the full path here instead. Find yours with:
+//   python -c "import sys; print(sys.executable)"
+const PYTHON_BIN_OVERRIDE = '';
+
+/**
+ * Looks for python.exe in the usual install folders and returns the newest one.
+ * Apache often doesn't know your PATH, so we search the folders directly.
+ */
+function find_python(): string
+{
+    if (PYTHON_BIN_OVERRIDE !== '') {
+        return PYTHON_BIN_OVERRIDE;
+    }
+
+    $patterns = [];
+    if (DIRECTORY_SEPARATOR === '\\') {   // Windows
+        $local = getenv('LOCALAPPDATA') ?: '';
+        if ($local !== '') {
+            $patterns[] = $local . '\\Python\\pythoncore-*\\python.exe';      // Python install manager (python.org, 3.14+)
+            $patterns[] = $local . '\\Programs\\Python\\Python3*\\python.exe'; // classic python.org installer
+        }
+        $patterns[] = 'C:\\Program Files\\Python3*\\python.exe';               // "install for all users"
+        $patterns[] = 'C:\\Python3*\\python.exe';
+        // When Apache runs as a Windows service it has no LOCALAPPDATA, so also check every user folder
+        $patterns[] = 'C:\\Users\\*\\AppData\\Local\\Python\\pythoncore-*\\python.exe';
+        $patterns[] = 'C:\\Users\\*\\AppData\\Local\\Programs\\Python\\Python3*\\python.exe';
+    } else {                              // macOS / Linux
+        $patterns = ['/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/usr/bin/python3'];
+    }
+
+    foreach ($patterns as $pattern) {
+        $found = glob($pattern) ?: [];
+        if ($found) {
+            usort($found, fn($a, $b) => strnatcasecmp($b, $a));   // newest version first (3.13 before 3.9)
+            return $found[0];
+        }
+    }
+
+    return 'python';   // last resort: hope it's on Apache's PATH
+}
+
+define('PYTHON_BIN', find_python());
 
 // Limits that keep each request small (and your bill predictable)
 define('CHAT_MAX_TURNS', 20);       // only the last 20 messages are sent to Gemini
